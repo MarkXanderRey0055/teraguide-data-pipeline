@@ -12,3 +12,17 @@ TerraGuide is a property management and real estate platform used to manage prop
 ### 2. Source Database
 - **Database Management System:** MongoDB
 - **Source:** TerraGuide operational database
+
+
+### 3. Extraction Method
+
+
+
+
+
+### 4. Extraction Scope
+
+
+
+
+### 5. Source Limitations and Assumptions
