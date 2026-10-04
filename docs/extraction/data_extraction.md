@@ -1,6 +1,5 @@
 # Data Extraction Documentation
 
-
 ## Data Source
 
 ###  1. Source System
@@ -30,10 +29,29 @@ TerraGuide is a property management and real estate platform used to manage prop
 
 - **Extraction schedule:**  
    The extraction process will run automatically every **60 minutes (hourly batch)**.
-
 ### 4. Extraction Scope
 
+The extraction process will focus only on the data required for the analytics application.
 
+The selected datasets are:
+
+- **Property Listings** — used to determine the total number of properties listed in the TerraGuide system and support property-related analytics.
+- **Buyer Listings** — used to determine the total number of buyers listed in the TerraGuide system and support buyer-related analytics.
+- **Transactions** — used to support transaction-related analytics, including monthly revenue.
+
+These datasets will serve as the primary source for the analytics dashboard.
 
 
 ### 5. Source Limitations and Assumptions
+
+- The TerraGuide MongoDB database must be accessible during extraction.
+- Required collections and fields are assumed to be available.
+- Historical analytics depend on the availability of historical records in the
+  source database.
+- Changes to collection names, field names, or data types may affect the
+  extraction process.
+- The accuracy of the extracted data depends on the quality and completeness of
+  the source records.
+
+
+  ## 2. Source Collections and Field Specification
