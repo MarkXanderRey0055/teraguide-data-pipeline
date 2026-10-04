@@ -55,3 +55,64 @@ These datasets will serve as the primary source for the analytics dashboard.
 
 
   ## 2. Source Collections and Field Specification
+
+Since TerraGuide uses MongoDB, the source tables are represented as *collections*, while columns are represented as *fields*.
+
+Only fields relevant to the analytics pipeline are included.
+
+### 2.1 Property Listings
+
+| Item | Details |
+|---|---|
+| *Name* | Property Listings |
+| *Purpose* | Stores property listing records available in the TerraGuide system. |
+| *Primary Key / Unique Identifier* | _id |
+| *Relevant Relationship* | Property listings can be associated with transaction records through the property identifier. |
+| *Reason for Inclusion* | Used to determine the total number of property listings and support property-related analytics. |
+
+#### Relevant Fields
+
+| Field | Data Type | Key | Description / Purpose |
+|---|---|---|---|
+| _id | ObjectId | Primary Key | Uniquely identifies each property listing. |
+| location | String | - | Stores the location of the property. |
+| price | Number | - | Stores the listed property price. |
+| status | String | - | Identifies whether the property is Available, Reserved, or Sold. |
+
+### 2.2 Buyer Listings
+
+| Item | Details |
+|---|---|
+| *Name* | Buyer Listings |
+| *Purpose* | Stores buyer listing records in the TerraGuide system. |
+| *Primary Key / Unique Identifier* | _id |
+| *Relevant Relationship* | Buyer listings can be associated with transaction records through the buyer identifier. |
+| *Reason for Inclusion* | Used to determine the total number of buyer listings and support buyer-related analytics. |
+
+#### Relevant Fields
+
+| Field | Data Type | Key | Description / Purpose |
+|---|---|---|---|
+| _id | ObjectId | Primary Key | Uniquely identifies each buyer listing. |
+| userId | ObjectId | Foreign Key | References the user associated with the buyer listing. |
+
+### 2.3 Transactions
+
+| Item | Details |
+|---|---|
+| *Name* | Transactions |
+| *Purpose* | Stores transaction records involving buyers and properties in the TerraGuide system. |
+| *Primary Key / Unique Identifier* | _id |
+| *Relevant Relationships* | Transactions connect buyer listings and property listings through buyerId and propertyId. |
+| *Reason for Inclusion* | Used for transaction-related analytics and as the source data for calculating monthly revenue. |
+
+#### Relevant Fields
+
+| Field | Data Type | Key | Description / Purpose |
+|---|---|---|---|
+| _id | ObjectId | Primary Key | Uniquely identifies each transaction. |
+| buyerId | ObjectId | Foreign Key | References the buyer involved in the transaction. |
+| propertyId | ObjectId | Foreign Key | References the associated property. |
+| amount | Number | - | Stores the transaction amount. |
+| status | String | - | Stores the current transaction status. |
+| completedAt | Date | - | Stores the date when the transaction was completed. |
