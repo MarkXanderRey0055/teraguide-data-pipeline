@@ -149,3 +149,18 @@ Extraction logs will be retained to support monitoring, troubleshooting, auditin
 - *Archiving:* Older logs may be archived if they are still required for auditing, troubleshooting, or project documentation.
 - *Deletion Rules:* Logs may only be deleted after the defined retention period has passed and when they are no longer required for troubleshooting, auditing, or recovery.
 - *Responsible Process:* Log retention and deletion will be managed by the data pipeline maintainers or designated project members.
+
+## 8. Common Extraction Problems and Mitigation
+
+The following issues may occur during the extraction of data from the TerraGuide MongoDB database.
+
+| Problem | Possible Cause | Impact on Extraction | Proposed Mitigation |
+|---|---|---|---|
+| MongoDB Connection Failure | Network interruption, incorrect connection string, authentication failure, or MongoDB Atlas service unavailability. | The extraction process cannot access the source collections and the current extraction run may fail. | Validate the database connection before extraction, record the error in the extraction log, and retry the extraction after the connection is restored. |
+| Missing Required Collection | A required collection is renamed, removed, or unavailable in the source database. | Data required by the analytics pipeline cannot be extracted, resulting in incomplete output. | Validate that all required collections exist before extraction and stop or flag the extraction run if a required collection is missing. |
+| Missing Required Field | A required field is removed, renamed, or unavailable in some source records. | The extracted dataset may be incomplete or required analytics fields may not be available. | Validate required fields during extraction and record affected records or extraction failures for review. |
+| Schema or Data Type Change | The structure or data type of a field in MongoDB changes after the extraction pipeline has been implemented. | The extraction script may fail, produce invalid output, or serialize data incorrectly. | Validate expected field names and data types before processing and update the extraction specification when approved schema changes occur. |
+| Duplicate Records | Duplicate records may be retrieved due to incorrect extraction logic or repeated processing of the same extraction window. | Duplicate data may appear in the extracted dataset and affect downstream processing. | Use the MongoDB _id field to identify unique records and validate primary key uniqueness after extraction. |
+| Incorrect Extraction Window | The Last_Successful_Run_Timestamp or Current_Execution_Time is incorrect, missing, or improperly applied. | Records may be skipped or extracted more than once during incremental extraction. | Validate the extraction window before running the query and store the timestamp of the last successful extraction run. |
+| Extraction Interruption | Network loss, script failure, system shutdown, or unexpected runtime error occurs while data is being extracted. | The extraction may stop before all required records are processed, resulting in incomplete output. | Record the extraction status and error details, mark the run as failed, and retry the extraction from the appropriate extraction window. |
+| Parquet Serialization Failure | Extracted data contains unsupported or inconsistent values that cannot be serialized correctly by PyArrow. | The extracted dataset may not be written successfully to Parquet format. | Validate extracted field structures before serialization, record the error, and prevent incomplete output from being passed to the next stage. |
