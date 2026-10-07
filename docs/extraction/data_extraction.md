@@ -138,3 +138,14 @@ The validation process focuses only on extraction-level checks. Data cleaning, s
 
 
 ## 4. Extraction Metadata and Log Specification
+
+## 5. Log Retention and Access
+
+Extraction logs will be retained to support monitoring, troubleshooting, auditing, and recovery of the TerraGuide data pipeline.
+
+- *Retention Period:* Extraction logs will be retained for 90 days to provide sufficient historical information for troubleshooting and reviewing previous extraction runs.
+- *Storage Location:* Logs will be stored within the data pipeline environment in a dedicated logging directory or log storage location.
+- *Access Permissions:* Only authorized project members responsible for development, monitoring, and maintenance of the data pipeline will have access to the extraction logs.
+- *Archiving:* Older logs may be archived if they are still required for auditing, troubleshooting, or project documentation.
+- *Deletion Rules:* Logs may only be deleted after the defined retention period has passed and when they are no longer required for troubleshooting, auditing, or recovery.
+- *Responsible Process:* Log retention and deletion will be managed by the data pipeline maintainers or designated project members.
