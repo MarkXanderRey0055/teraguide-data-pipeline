@@ -116,3 +116,25 @@ Only fields relevant to the analytics pipeline are included.
 | amount | Number | - | Stores the transaction amount. |
 | status | String | - | Stores the current transaction status. |
 | completedAt | Date | - | Stores the date when the transaction was completed. |
+
+
+## 3. Extraction Validation and Data Quality Checks
+
+Validation checks will be performed during each extraction run to ensure that the required TerraGuide data is accessible, complete, and suitable for handover to the Transformation Stage.
+
+The validation process focuses only on extraction-level checks. Data cleaning, standardization, and business transformations will be handled in the Transformation Stage.
+
+| Check Name | Target | Purpose | Validation Criteria |
+|---|---|---|---|
+| Source Connection Check | TerraGuide MongoDB Atlas database | Ensures that the source database is available before extraction begins. | PASS if a connection to MongoDB Atlas is successfully established. FAIL if the connection cannot be established. |
+| Required Collection Check | Property Listings, Buyer Listings, Transactions | Ensures that all collections required by the analytics pipeline are available. | PASS if all required collections exist and are accessible. FAIL if one or more required collections are missing or inaccessible. |
+| Required Field Check | Required fields from each selected collection | Ensures that the fields needed by the extraction and analytics pipeline are available in the source data. | PASS if all required fields are present in the extracted records or collection schema. FAIL if a required field is unavailable. |
+| Required Identifier Check | `_id`, `userId`, `buyerId`, `propertyId` where applicable | Ensures that identifiers needed to uniquely identify and relate records are available. | PASS if required identifiers are present for records where they are expected. FAIL if required identifiers are missing. |
+| Primary Key Uniqueness Check | `_id` in Property Listings, Buyer Listings, and Transactions | Verifies that extracted records can be uniquely identified. | PASS if no duplicate `_id` values exist within each extracted dataset. FAIL if duplicate `_id` values are detected. |
+| Extraction Window Check | `updatedAt` and extraction timestamps | Ensures that incremental extraction retrieves records only within the intended extraction window. | PASS if extracted records have an `updatedAt` value greater than the `Last_Successful_Run_Timestamp` and less than or equal to the `Current_Execution_Time`. FAIL if records fall outside the defined extraction window. |
+| Record Count Check | Each extracted collection | Verifies that the number of records retrieved from the source matches the number of records successfully included in the extracted output. | PASS if the source query record count matches the number of successfully extracted records, excluding documented rejected records. FAIL if an unexplained count difference exists. |
+| Extraction Completeness Check | Extracted Property Listings, Buyer Listings, and Transactions datasets | Ensures that all records returned by the defined source query are processed during the extraction run. | PASS if all records returned by the source query are either successfully extracted or explicitly recorded as rejected. FAIL if records are unaccounted for. |
+| Extraction Error Check | Entire extraction process | Detects database query errors, connection interruptions, serialization failures, or other extraction failures. | PASS if the extraction finishes without critical errors. FAIL if a critical error prevents the extraction from completing successfully. |
+
+
+## 4. Extraction Metadata and Log Specification
