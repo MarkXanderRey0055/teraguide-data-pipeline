@@ -198,6 +198,19 @@ The following naming rules will be followed:
 - Field names will not be abbreviated or renamed during extraction unless a documented mapping is required.
 - Any standardization of field names, such as conversion from camelCase to snake_case, will be handled in the Transformation Stage.
 
+3. Schema Consistency
+
+The extraction process will validate the expected collection structure and required fields before extracted data is handed over to the next pipeline stage.
+
+If an unexpected schema change is detected:
+
+- Missing required fields will cause the affected extraction validation check to fail.
+- Unexpected changes to required field data types will be recorded and flagged for review.
+- Renamed or removed fields will require the extraction specification and extraction script to be reviewed before processing continues.
+- Additional fields that are not required by the extraction contract may be ignored.
+- Changes to primary or foreign key fields will be treated as critical because they may affect record identification and relationships between datasets.
+- The documented schema must be updated whenever an approved change is made to the TerraGuide source database.
+
 
 ## 8. Common Extraction Problems and Mitigation
 
