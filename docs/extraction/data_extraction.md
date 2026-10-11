@@ -185,7 +185,18 @@ Extraction logs will be retained to support monitoring, troubleshooting, auditin
 | `completedAt` | Date | Required for time-based transaction and monthly revenue analytics |
 
 
+2. Naming Convention
 
+The extraction process will preserve the original field names used by the TerraGuide MongoDB collections to maintain traceability between the source database and the extracted dataset.
+
+The following naming rules will be followed:
+
+- Collection names will be clearly identified according to their corresponding TerraGuide source collection.
+- MongoDB's `_id` field will remain unchanged and will serve as the primary unique identifier.
+- Existing source fields that use camelCase, such as `userId`, `buyerId`, `propertyId`, and `completedAt`, will retain their original names during extraction.
+- Foreign key fields will retain the `Id` suffix used by the TerraGuide source system.
+- Field names will not be abbreviated or renamed during extraction unless a documented mapping is required.
+- Any standardization of field names, such as conversion from camelCase to snake_case, will be handled in the Transformation Stage.
 
 
 ## 8. Common Extraction Problems and Mitigation
