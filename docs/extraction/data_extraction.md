@@ -150,6 +150,44 @@ Extraction logs will be retained to support monitoring, troubleshooting, auditin
 - *Deletion Rules:* Logs may only be deleted after the defined retention period has passed and when they are no longer required for troubleshooting, auditing, or recovery.
 - *Responsible Process:* Log retention and deletion will be managed by the data pipeline maintainers or designated project members.
 
+
+
+
+## 6.Extraction Data Contract and Naming Convention
+
+## 1. Required Schemas
+
+#### Property Listings
+
+| Field | Expected Data Type | Requirement |
+|---|---|---|
+| `_id` | ObjectId | Required; unique identifier for each property listing |
+| `location` | String | Required for property-related analytics |
+| `price` | Number | Required for property value-related analytics |
+| `status` | String | Required for property status analytics |
+
+#### Buyer Listings
+
+| Field | Expected Data Type | Requirement |
+|---|---|---|
+| `_id` | ObjectId | Required; unique identifier for each buyer listing |
+| `userId` | ObjectId | Required to identify the user associated with the buyer listing |
+
+#### Transactions
+
+| Field | Expected Data Type | Requirement |
+|---|---|---|
+| `_id` | ObjectId | Required; unique identifier for each transaction |
+| `buyerId` | ObjectId | Required to identify the buyer involved in the transaction |
+| `propertyId` | ObjectId | Required to identify the associated property |
+| `amount` | Number | Required for transaction and revenue analytics |
+| `status` | String | Required to determine the current transaction status |
+| `completedAt` | Date | Required for time-based transaction and monthly revenue analytics |
+
+
+
+
+
 ## 8. Common Extraction Problems and Mitigation
 
 The following issues may occur during the extraction of data from the TerraGuide MongoDB database.
