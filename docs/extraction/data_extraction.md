@@ -276,6 +276,108 @@ If an unexpected schema change is detected:
 - Changes to primary or foreign key fields will be treated as critical because they may affect record identification and relationships between datasets.
 - The documented schema must be updated whenever an approved change is made to the TerraGuide source database.
 
+## 7. Extraction Acceptance and Handover Rules
+
+This section defines the conditions under which extracted TerraGuide data may proceed to the Transformation Stage. The acceptance decision will be based on extraction validation results, extraction status, record-count reconciliation, and the successful generation of the required Parquet output files.
+
+Stage 1 is responsible for extracting, validating, and packaging source data. Data cleaning, standardization, and business transformations remain the responsibility of the Transformation Stage.
+
+### 7.1 Acceptance Decision Rules
+
+The following rules are proposed for determining the outcome of an extraction run.
+
+| Overall Condition | Acceptance Decision | Pipeline Action | Decision Type |
+|---|---|---|---|
+| All required collections are accessible, critical validation checks pass, record counts are reconciled, and all required Parquet files are successfully generated. | APPROVED | Allow the extracted data and associated metadata to proceed to the Transformation Stage. | Automatic, once implemented |
+| Extraction completes, but a non-critical warning or an unexplained but non-critical record-count variation requires investigation. | MANUAL REVIEW | Hold the affected output until the discrepancy is reviewed and resolved or formally accepted. | Manual |
+| A critical validation check fails, a required collection is unavailable, or required identifiers are missing in a way that makes the extracted data unusable. | REJECTED | Prevent the affected output from proceeding to the Transformation Stage. Record the failure and investigate before retrying. | Automatic rejection, once implemented |
+| Extraction is interrupted, a required Parquet file cannot be generated, or the output is incomplete or unreadable. | REJECTED | Mark the run as failed, preserve diagnostic logs, and retry after the underlying issue is resolved. | Automatic rejection, once implemented |
+
+A rejected extraction must not be treated as approved simply because some records were successfully retrieved. Any partial output must be identified and prevented from being mistaken for a complete, accepted dataset.
+
+### 7.2 Automatic Approval
+
+An extraction run may be approved automatically when all of the following conditions are satisfied:
+
+1. The connection to MongoDB Atlas is successful.
+2. All required source collections are available and accessible.
+3. Required fields and identifiers satisfy the extraction contract.
+4. Primary key uniqueness checks pass for each extracted dataset.
+5. Record counts are reconciled, with any excluded records explicitly accounted for.
+6. Extraction completes without unresolved critical errors.
+7. All required Parquet files are successfully written and are readable.
+8. The applicable validation results and extraction metadata are recorded.
+
+*Proposed pipeline action:* Once automatic acceptance has been implemented, the extraction process may mark the run as APPROVED and make the accepted Parquet files available to the Transformation Stage.
+
+### 7.3 Manual Review
+
+Manual review is required when extraction completes but a condition needs further investigation before the output can be accepted.
+
+Examples include:
+
+- An unexpected record-count difference that has not yet been explained.
+- A non-critical validation warning.
+- An unexpected source schema variation that does not immediately prevent extraction but requires confirmation.
+- An output discrepancy that needs verification against the source database.
+
+*Proposed pipeline action:* Place the affected extraction run on hold. The designated data pipeline maintainer or project member responsible for extraction should review the logs, validation results, and output files. The reviewer must record the decision and its justification before the data proceeds.
+
+Manual review must not be used to bypass a critical validation failure.
+
+### 7.4 Rejection and Failure Handling
+
+An extraction run must be rejected when a critical failure prevents the output from meeting the extraction requirements.
+
+Examples include:
+
+- MongoDB Atlas cannot be accessed.
+- A required collection is missing or inaccessible.
+- A critical required field or identifier is unavailable.
+- Duplicate primary keys are detected in the extracted dataset.
+- An unexplained record loss or incomplete extraction is detected.
+- A required Parquet file cannot be written or read successfully.
+
+*Proposed recovery procedure:*
+
+1. Record the failure status, error details, affected collection, and run ID.
+2. Preserve the log records and any partial output for diagnostic purposes.
+3. Prevent incomplete or rejected output from being handed over as an accepted dataset.
+4. Correct the underlying cause, such as a connectivity issue, extraction query error, schema incompatibility, or serialization failure.
+5. Retry the extraction using the appropriate extraction window.
+6. Repeat the required validation checks before making the output available for handover.
+
+Retry behavior and partial-output quarantine are proposed operational rules and must be implemented or otherwise established before they can be considered active pipeline behavior.
+
+### 7.5 Handover to the Transformation Stage
+
+An approved extraction run should provide the following handover package:
+
+| Handover Item | Description | Purpose |
+|---|---|---|
+| Extracted Parquet files | The successfully extracted datasets for Property Listings, Buyer Listings, and Transactions. | Supplies the source data for downstream transformation. |
+| Run metadata | Run ID, collection name, timestamps, extraction status, record counts, and extraction window, where applicable. | Establishes traceability between the output and its extraction execution. |
+| Validation summary | The results of the required extraction validation checks. | Provides evidence that the extracted data meets the Stage 1 acceptance criteria. |
+| Error and warning information | Relevant errors, warnings, or rejected-record counts, if applicable. | Supports troubleshooting and documents any limitations affecting the output. |
+| Output manifest | A proposed record of the files produced, their associated collections, and their extraction run. | Helps the receiving stage identify and verify the expected input files. |
+
+The Transformation Stage should receive only output that has satisfied the applicable acceptance rules. The handover package should preserve the original source field names and data types according to the extraction data contract; data cleaning, standardization, and business transformations should occur in the next stage.
+
+### 7.6 Implementation Status and Responsibility
+
+*Confirmed project decisions:*
+- Stage 1 will produce Parquet files using PyArrow.
+- The extraction script will use Python logging.
+- The extracted data is intended for downstream transformation.
+
+*Proposed policies pending implementation or approval:*
+- The APPROVED, MANUAL REVIEW, and REJECTED decision states.
+- Automatic acceptance and rejection logic.
+- Manual review responsibility and approval recording.
+- Retry handling and the treatment of partial output.
+- Output manifests and formal handover packaging.
+
+The data pipeline maintainer or designated project member should be responsible for reviewing exceptions and confirming that the implemented extraction process follows the documented acceptance and handover rules.
 
 ## 8. Common Extraction Problems and Mitigation
 
