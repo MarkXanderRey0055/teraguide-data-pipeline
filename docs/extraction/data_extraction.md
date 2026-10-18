@@ -138,7 +138,72 @@ The validation process focuses only on extraction-level checks. Data cleaning, s
 
 
 ## 4. Extraction Metadata and Log Specification
+Extraction metadata and logs will be used to monitor, trace, and troubleshoot each execution of the TerraGuide data extraction process. The extraction script will use Python's logging module to record execution events, validation results, record counts, and errors encountered during extraction.
 
+The extraction process retrieves data from the TerraGuide MongoDB Atlas operational database using Python and PyMongo. Extracted data will be serialized into Parquet files using PyArrow for handover to the Transformation Stage.
+
+### 4.1 Extraction Metadata Fields
+
+The following metadata fields define the information that should be recorded for each extraction run.
+
+| Metadata Field | Purpose | Example Value or Format |
+|---|---|---|
+| run_id | Uniquely identifies an extraction execution for traceability. | extract_20261018_120000 |
+| collection_name | Identifies the MongoDB collection being extracted. | Property Listings |
+| start_timestamp | Records when the extraction process begins. | 2026-10-18T12:00:00+08:00 |
+| end_timestamp | Records when the extraction process finishes. | 2026-10-18T12:00:08+08:00 |
+| extraction_status | Indicates the final result of the extraction operation. | SUCCESS, FAILED, or PARTIAL |
+| records_read | Records the number of source documents retrieved by the extraction query. | 1250 |
+| records_extracted | Records the number of source documents successfully included in the extracted output. | 1250 |
+| records_rejected | Records the number of documents excluded from the output because of extraction-level validation or serialization failures, where applicable. | 0 |
+| extraction_window_start | Identifies the beginning of the incremental extraction window. | 2026-10-18T11:00:00+08:00 |
+| extraction_window_end | Identifies the end of the incremental extraction window. | 2026-10-18T12:00:00+08:00 |
+| validation_results | Records the outcome of the applicable extraction validation checks. | {"connection": "PASS", "record_count": "PASS"} |
+| error_code | Identifies the category of an extraction error, if one occurs. | PARQUET_WRITE_ERROR |
+| error_message | Describes the error encountered during extraction, if applicable. | Failed to write extracted data to Parquet. |
+| duration_seconds | Records the total time taken to complete the extraction run. | 8.42 |
+| output_file | Identifies the generated Parquet file associated with the extraction run. | property_listings_20261018_120000.parquet |
+
+The examples above illustrate the proposed metadata format. Actual values will depend on the extraction execution and the fields implemented in the Python logging and extraction scripts.
+
+### 4.2 Logging Implementation
+
+The extraction script will use Python's built-in logging module to record operational events. Log messages should include a timestamp, severity level, and descriptive message. Where practical, messages should also identify the run ID and affected collection.
+
+The following log levels are proposed:
+
+| Log Level | Purpose | Example Event |
+|---|---|---|
+| INFO | Records normal extraction activities and successful operations. | Extraction started; 1,250 records retrieved. |
+| WARNING | Records non-critical conditions requiring attention. | An unexpected record-count difference was detected. |
+| ERROR | Records errors that prevent an operation from completing successfully. | MongoDB query or Parquet serialization failed. |
+| CRITICAL | Records severe failures that prevent the extraction run from safely completing. | A required collection is unavailable and extraction cannot proceed. |
+
+### 4.3 Use of Metadata and Logs
+
+Extraction metadata and logs will support the following operational activities:
+
+- *Monitoring:* Determine whether an extraction run completed successfully and review its duration and record counts.
+- *Troubleshooting:* Identify database connection failures, missing collections, query errors, validation failures, and Parquet serialization errors.
+- *Auditing and traceability:* Associate extracted files with their execution run, source collection, extraction window, and validation results.
+- *Recovery:* Identify failed or incomplete runs and determine the extraction window and output files that need to be checked before retrying.
+- *Handover verification:* Provide evidence that the extracted files were generated and that the required validation checks were performed.
+
+### 4.4 Implementation Status
+
+*Confirmed project decisions:*
+- Python will be used for the extraction script.
+- PyMongo will retrieve records from MongoDB Atlas.
+- PyArrow will be used to write extracted data in Parquet format.
+- Python's logging module will be used for extraction logs.
+
+*Proposed specifications pending implementation or verification:*
+- The complete metadata field set listed in Section 4.1.
+- The standardized status values, error codes, and log levels.
+- Recording metadata in a structured form that can be associated with each extraction run and output file.
+- Using the recorded metadata and validation results to support recovery and handover decisions.
+
+The metadata and logging implementation should be reviewed to ensure that the documented fields match the actual behavior of the extraction script.
 ## 5. Log Retention and Access
 
 Extraction logs will be retained to support monitoring, troubleshooting, auditing, and recovery of the TerraGuide data pipeline.
