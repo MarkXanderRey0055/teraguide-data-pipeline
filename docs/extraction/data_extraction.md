@@ -56,67 +56,77 @@ These datasets will serve as the primary source for the analytics dashboard.
 
   ## 2. Source Collections and Field Specification
 
-Since TerraGuide uses MongoDB, the source tables are represented as *collections*, while columns are represented as *fields*.
+Since TerraGuide uses MongoDB, source tables are represented as collections, while columns are represented as fields.
 
-Only fields relevant to the analytics pipeline are included.
+The extraction pipeline is configured to retrieve data from the `properties`, `buyerpreferences`, and `transactions` collections. The fields listed below represent the fields relevant to the analytics pipeline and the expected source data contract. The actual fields and data types should be verified against the source documents and the current implementation.
 
 ### 2.1 Property Listings
 
 | Item | Details |
 |---|---|
-| *Name* | Property Listings |
-| *Purpose* | Stores property listing records available in the TerraGuide system. |
-| *Primary Key / Unique Identifier* | _id |
-| *Relevant Relationship* | Property listings can be associated with transaction records through the property identifier. |
-| *Reason for Inclusion* | Used to determine the total number of property listings and support property-related analytics. |
+| **MongoDB Collection** | `properties` |
+| **Logical Name** | Property Listings |
+| **Purpose** | Stores property listing records available in the TerraGuide system. |
+| **Primary Key / Unique Identifier** | `_id` |
+| **Relevant Relationship** | Property listings can be associated with transaction records through the property identifier, represented by `propertyId` in the Transactions collection. |
+| **Reason for Inclusion** | Supports property listing counts and other property-related analytics. |
 
 #### Relevant Fields
 
-| Field | Data Type | Key | Description / Purpose |
+| Field | Expected Data Type | Key | Description / Purpose |
 |---|---|---|---|
-| _id | ObjectId | Primary Key | Uniquely identifies each property listing. |
-| location | String | - | Stores the location of the property. |
-| price | Number | - | Stores the listed property price. |
-| status | String | - | Identifies whether the property is Available, Reserved, or Sold. |
+| `_id` | ObjectId | Primary Key | Uniquely identifies each property listing in MongoDB. |
+| `location` | String | - | Stores the location of the property. |
+| `price` | Number | - | Stores the listed property price. |
+| `status` | String | - | Stores the current property listing status. Possible values must be confirmed against the source data. |
 
 ### 2.2 Buyer Listings
 
 | Item | Details |
 |---|---|
-| *Name* | Buyer Listings |
-| *Purpose* | Stores buyer listing records in the TerraGuide system. |
-| *Primary Key / Unique Identifier* | _id |
-| *Relevant Relationship* | Buyer listings can be associated with transaction records through the buyer identifier. |
-| *Reason for Inclusion* | Used to determine the total number of buyer listings and support buyer-related analytics. |
+| **MongoDB Collection** | `buyerpreferences` |
+| **Logical Name** | Buyer Listings |
+| **Purpose** | Stores buyer preference records in the TerraGuide system. |
+| **Primary Key / Unique Identifier** | `_id` |
+| **Relevant Relationship** | Buyer-related records may be associated with transactions through the buyer identifier, represented by `buyerId` in the Transactions collection. The exact relationship to `userId` must be confirmed against the source data. |
+| **Reason for Inclusion** | Supports buyer-related analytics and analysis of buyer preference records. |
 
 #### Relevant Fields
 
-| Field | Data Type | Key | Description / Purpose |
+| Field | Expected Data Type | Key | Description / Purpose |
 |---|---|---|---|
-| _id | ObjectId | Primary Key | Uniquely identifies each buyer listing. |
-| userId | ObjectId | Foreign Key | References the user associated with the buyer listing. |
+| `_id` | ObjectId | Primary Key | Uniquely identifies each buyer preference record in MongoDB. |
+| `userId` | ObjectId | Identifier / Relationship Field | Identifies the user associated with the buyer preference record, subject to confirmation against the source data. |
 
 ### 2.3 Transactions
 
 | Item | Details |
 |---|---|
-| *Name* | Transactions |
-| *Purpose* | Stores transaction records involving buyers and properties in the TerraGuide system. |
-| *Primary Key / Unique Identifier* | _id |
-| *Relevant Relationships* | Transactions connect buyer listings and property listings through buyerId and propertyId. |
-| *Reason for Inclusion* | Used for transaction-related analytics and as the source data for calculating monthly revenue. |
+| **MongoDB Collection** | `transactions` |
+| **Logical Name** | Transactions |
+| **Purpose** | Stores transaction records involving buyers and properties in the TerraGuide system. |
+| **Primary Key / Unique Identifier** | `_id` |
+| **Relevant Relationships** | The `buyerId` and `propertyId` fields identify the buyer and property associated with a transaction, respectively. Their references must be verified against the source data. |
+| **Reason for Inclusion** | Supports transaction-related analytics and may provide data for monthly revenue calculations, depending on the available transaction fields and business rules. |
 
 #### Relevant Fields
 
-| Field | Data Type | Key | Description / Purpose |
+| Field | Expected Data Type | Key | Description / Purpose |
 |---|---|---|---|
-| _id | ObjectId | Primary Key | Uniquely identifies each transaction. |
-| buyerId | ObjectId | Foreign Key | References the buyer involved in the transaction. |
-| propertyId | ObjectId | Foreign Key | References the associated property. |
-| amount | Number | - | Stores the transaction amount. |
-| status | String | - | Stores the current transaction status. |
-| completedAt | Date | - | Stores the date when the transaction was completed. |
+| `_id` | ObjectId | Primary Key | Uniquely identifies each transaction record in MongoDB. |
+| `buyerId` | ObjectId | Relationship Field | Identifies the buyer associated with the transaction. |
+| `propertyId` | ObjectId | Relationship Field | Identifies the property associated with the transaction. |
+| `amount` | Number | - | Stores the transaction amount. |
+| `status` | String | - | Stores the transaction status. Possible values must be confirmed against the source data. |
+| `completedAt` | Date | - | Represents the transaction completion date if this field exists in the source data. Its presence and use must be verified before treating it as a required field for monthly revenue calculations. |
 
+### 2.4 Field Specification Notes
+
+- MongoDB uses `_id` as the unique identifier for documents by default. The expected ObjectId type should be verified against the actual source documents.
+- The data types listed in this section are expected types based on the current field specification. They must be confirmed against the source data and the extraction output.
+- The fields listed above describe the data relevant to the analytics pipeline. They do not necessarily represent an explicit field projection in the extraction query.
+- The current extraction implementation retrieves documents using an unfiltered query (`find({})`). Therefore, this documentation should not imply that the extraction script retrieves only the fields listed in these tables unless field filtering is implemented separately.
+- The relationship between `buyerpreferences.userId` and `transactions.buyerId` must be verified before assuming that these fields contain matching identifiers.
 
 ## 3. Extraction Validation and Data Quality Checks
 
