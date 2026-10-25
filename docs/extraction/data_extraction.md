@@ -1,57 +1,64 @@
-# Data Extraction Documentation
+## 1.Data Source
 
-## Data Source
+### 1. Source System
 
-###  1. Source System
-- System Name:
-TerraGuide
-- Purpose:
-TerraGuide is a property management and real estate platform used to manage property listings, buyer-related data, transactions, and other operational records.
+- System Name: TerraGuide
+- Purpose: TerraGuide is a property management and real estate platform used to manage property listings, buyer-related data, transactions, and other operational records.
+- Source Type: Operational database.
+- Database Management System: MongoDB.
+- Database Hosting: MongoDB Atlas.
 
 ### 2. Source Database
-- **Database Management System:** MongoDB
-- **Source:** TerraGuide operational database
 
+The extraction pipeline is configured to retrieve data from the following MongoDB collections:
+
+| MongoDB Collection | Description |
+|---|---|
+| properties | Contains property records used for property-related analytics. |
+| buyerpreferences | Contains buyer preference records used for buyer-related analytics. |
+| transactions | Contains transaction records used for transaction-related analytics. |
+
+These are the default collection names specified in the current repository configuration. The actual collection names may differ if environment variables or deployment settings override them.
 
 ### 3. Extraction Method
 
-- **Field and logic used to determine the extraction window:**  
-   The field used is **`updatedAt`**, which records when a document was created or modified. The extraction window uses `Last_Successful_Run_Timestamp` as the starting point and `Current_Execution_Time` as the endpoint to identify newly added or updated records.
+The current implementation uses full-snapshot extraction. The extraction script retrieves all documents from each configured collection using an unfiltered MongoDB query (find({})).
 
-- **How data will be extracted:**  
-   Data will be extracted directly from the **MongoDB Atlas** collections using a filtered database query. The retrieved documents will be processed, cleaned, and transformed into a tabular format for further ETL processing.
+The extracted records are written to Parquet files using PyArrow. The current implementation does not apply an incremental filter based on updatedAt or a persisted last-successful-run timestamp.
 
-- **Extraction tool, script, or technology:**  
-   A **Python script** will be used, utilizing **PyMongo** to connect to MongoDB and retrieve records, **Pandas** to process the extracted data, and **PyArrow** to serialize the data into Parquet format.
+| Tool or Technology | Purpose |
+|---|---|
+| Python | Implements the extraction process. |
+| PyMongo | Connects to MongoDB and retrieves source documents. |
+| Pandas | Supports tabular data handling where used by the pipeline. |
+| PyArrow | Serializes extracted data into Parquet files. |
+| Python logging module | Records extraction events, validation results, and errors. |
 
-- **Full or incremental extraction:**  
-   The system will primarily use **incremental extraction** to retrieve only newly added or modified records, reducing unnecessary database and network processing. An initial **full extraction** will be performed once to establish the baseline dataset.
+Extraction Schedule
 
-- **Extraction schedule:**  
-   The extraction process will run automatically every **60 minutes (hourly batch)**.
+The current repository does not include an hourly scheduler or an Apache Airflow DAG. Extraction runs when the Python script or pipeline is invoked. Automatic scheduling may be considered a future enhancement.
+
+Full or Incremental Extraction
+
+The current implementation performs full-snapshot extraction. Incremental extraction may be introduced in the future to retrieve only newly created or modified records. This would require a reliable source timestamp field, a persisted last-successful-run timestamp, explicit extraction-window logic, and recovery handling for interrupted runs. These features must not be considered implemented until verified in the code.
+
 ### 4. Extraction Scope
 
-The extraction process will focus only on the data required for the analytics application.
+The extraction stage retrieves records from the configured properties, buyerpreferences, and transactions collections.
 
-The selected datasets are:
+The extracted data is stored as Parquet files in the default output directory, data/raw/, using Snappy compression. These files serve as input to the Transformation Stage.
 
-- **Property Listings** — used to determine the total number of properties listed in the TerraGuide system and support property-related analytics.
-- **Buyer Listings** — used to determine the total number of buyers listed in the TerraGuide system and support buyer-related analytics.
-- **Transactions** — used to support transaction-related analytics, including monthly revenue.
-
-These datasets will serve as the primary source for the analytics dashboard.
-
+The extraction stage is responsible for retrieving, validating, and storing source data. Data cleaning, standardization, and business transformations belong to the Transformation Stage.
 
 ### 5. Source Limitations and Assumptions
 
-- The TerraGuide MongoDB database must be accessible during extraction.
-- Required collections and fields are assumed to be available.
-- Historical analytics depend on the availability of historical records in the
-  source database.
-- Changes to collection names, field names, or data types may affect the
-  extraction process.
-- The accuracy of the extracted data depends on the quality and completeness of
-  the source records.
+- The MongoDB Atlas database must be accessible for extraction to complete successfully.
+- The configured source collections must exist and be accessible to the database account used by the pipeline.
+- The extracted data reflects the records returned by the source queries during execution.
+- Missing required fields, unexpected data types, or changes in collection structures may affect extraction validation and downstream processing.
+- The completeness of historical analytics depends on the historical records available in the source database.
+- Full-snapshot extraction retrieves all documents in the configured collections and may require additional processing time and resources as the data volume grows.
+- Incremental extraction and automatic scheduling are not part of the currently verified implementation and require additional development before they can be relied upon.
 
 
   ## 2. Source Collections and Field Specification
