@@ -62,3 +62,33 @@ Profiling counts and findings must be based on the actual data and must not be e
 ### 2.5 Use of Profiling Results
 
 The profiling results will serve as the basis for defining the data cleaning rules in Section 3 and the standardization rules in Section 4. Issues that are not observed in the extracted data should not be reported as confirmed findings.
+
+## 3. Data Cleaning Rules
+
+### 3.1 Purpose
+
+Data cleaning prepares the extracted datasets for subsequent transformation by addressing data quality issues identified during profiling. Cleaning operations must follow documented rules to ensure that records are handled consistently and that changes can be traced.
+
+### 3.2 Proposed Cleaning Rules
+
+| Rule ID | Data Quality Issue | Proposed Handling | Record Handling |
+|---|---|---|---|
+| C-01 | Missing values in required fields | Identify records with missing required values and evaluate them according to the applicable dataset requirements. | Retain or quarantine according to the defined rule. |
+| C-02 | Duplicate records | Identify duplicate records using the appropriate identifiers or documented duplicate criteria. | Retain one valid record or quarantine duplicates according to the approved rule. |
+| C-03 | Invalid field values | Validate values against the expected format, data type, or applicable constraints. | Correct only when a reliable correction rule exists; otherwise quarantine the affected record. |
+| C-04 | Inconsistent values | Identify inconsistent representations of the same type of information. | Standardize values when a documented mapping rule is available. |
+| C-05 | Unmatched dataset references | Identify records whose relevant references do not match the related dataset. | Handle according to the documented relationship and business requirements. |
+
+### 3.3 Record Retention and Rejection
+
+Records must not be silently removed during cleaning. Any record that is rejected or quarantined must be counted and documented, including the affected dataset and the reason for rejection.
+
+Records should only be corrected when the applicable correction rule is clear and supported by the available data. Missing or invalid information must not be replaced with arbitrary values.
+
+### 3.4 Traceability
+
+Each cleaning operation should be documented so that the team can identify the rule applied and determine its effect on the dataset. Where implemented, processing logs should record the number of records affected by each rule.
+
+### 3.5 Implementation Status
+
+The rules in this section are proposed cleaning specifications. They must be reviewed against the actual profiling results and implemented in the transformation script before they can be considered operational.
