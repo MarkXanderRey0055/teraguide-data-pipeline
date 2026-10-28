@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,9 +13,9 @@ import pyarrow.parquet as pq
 from bson import ObjectId
 from dotenv import load_dotenv
 from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import ConfigurationError, PyMongoError
 
-from extract_logger import log_extraction
+from extract_logger import log_extraction, redact_error_message
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -50,22 +51,71 @@ def to_parquet_value(value):
     return value
 
 
+def _safe_log_extraction(**kwargs):
+    """Write an extraction record without allowing logging errors to mask failures."""
+    try:
+        return log_extraction(**kwargs)
+    except Exception as exc:
+        print(
+            f"Extraction log write failed: {redact_error_message(exc)}",
+            file=sys.stderr,
+        )
+        if kwargs.get("error_message"):
+            print(
+                "Original extraction failure "
+                f"({kwargs.get('error_code')}): "
+                f"{redact_error_message(kwargs['error_message'])}",
+                file=sys.stderr,
+            )
+        return {
+            "run_id": kwargs["run_id"],
+            "dataset_name": kwargs["dataset_name"],
+            "extraction_status": kwargs["status"],
+            "_log_write_failed": True,
+        }
+
+
+def _remove_file(path, description):
+    """Remove a file created by this run, reporting cleanup errors to stderr."""
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        print(
+            f"Could not remove {description}: {redact_error_message(exc)}",
+            file=sys.stderr,
+        )
+
+
+def _error_code(exc, fallback):
+    """Use a MongoDB server error code when available, otherwise a stable category."""
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, (int, str)) and code else fallback
+
+
 def extract_collection(database, dataset_name, config, run_id, logger):
     """Extract one collection, validate basic requirements, and save a Parquet file."""
     started = datetime.now(timezone.utc)
     collection_name = config["collection"]
     output_file = None
+    output_path = None
+    temporary_path = None
+    output_created = False
     records = []
+    records_read = 0
     rejected = 0
     status = "FAILED"
     error_code = None
     error_message = None
     checks = {}
+    operation = "list_collections"
 
     try:
         if collection_name not in database.list_collection_names():
             raise LookupError(f"Collection '{collection_name}' was not found.")
 
+        operation = "query"
         documents = list(database[collection_name].find({}).sort("_id", 1))
         records_read = len(documents)
 
@@ -83,17 +133,29 @@ def extract_collection(database, dataset_name, config, run_id, logger):
             for doc in documents
         ]
 
+        operation = "create_output_directory"
         RAW_DIR.mkdir(parents=True, exist_ok=True)
         stamp = started.strftime("%Y%m%dT%H%M%SZ")
         output_path = RAW_DIR / f"{dataset_name}_{stamp}.parquet"
 
+        operation = "serialize"
         if records:
             table = pa.Table.from_pylist(records)
         else:
             table = pa.table({"_id": pa.array([], type=pa.string())})
 
-        pq.write_table(table, output_path, compression="snappy")
-        saved_count = pq.read_metadata(output_path).num_rows
+        temporary_path = RAW_DIR / f".{dataset_name}_{run_id}.parquet.tmp"
+        file_descriptor = os.open(
+            temporary_path,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o666,
+        )
+        os.close(file_descriptor)
+
+        operation = "write_parquet"
+        pq.write_table(table, temporary_path, compression="snappy")
+        operation = "read_parquet_metadata"
+        saved_count = pq.read_metadata(temporary_path).num_rows
 
         checks = {
             "collection_exists": True,
@@ -105,6 +167,8 @@ def extract_collection(database, dataset_name, config, run_id, logger):
         if saved_count != records_read:
             error_code = "RECORD_COUNT_MISMATCH"
             error_message = f"Read {records_read} records but wrote {saved_count} rows."
+            operation = "validate_parquet_count"
+            status = "FAILED"
         elif missing_fields or duplicate_ids:
             status = "PARTIAL"
             error_code = "DATA_VALIDATION_WARNING"
@@ -115,34 +179,48 @@ def extract_collection(database, dataset_name, config, run_id, logger):
         else:
             status = "SUCCESS"
 
-        output_file = str(output_path.relative_to(ROOT))
-        logger.info("%s: %s (%d records)", dataset_name, status, saved_count)
-        return log_extraction(
-            log_file=LOG_FILE, run_id=run_id, dataset_name=dataset_name,
-            collection_name=collection_name, started=started,
-            status=status, records_read=records_read, records_extracted=saved_count,
-            records_rejected=rejected, checks=checks, output_file=output_file,
-            error_code=error_code, error_message=error_message,
-        )
+        if status != "FAILED":
+            operation = "publish_parquet"
+            # A hard link publishes atomically and fails rather than replacing an
+            # earlier extraction that happens to have the same timestamp.
+            os.link(temporary_path, output_path)
+            output_created = True
+            try:
+                output_file = str(output_path.relative_to(ROOT))
+            except ValueError:
+                output_file = str(output_path)
+            logger.info("%s: %s (%d records)", dataset_name, status, saved_count)
 
     except LookupError as exc:
-        error_code, error_message = "COLLECTION_NOT_FOUND", str(exc)
+        status = "FAILED"
+        error_code, error_message = "COLLECTION_NOT_FOUND", redact_error_message(exc)
     except PyMongoError as exc:
-        error_code, error_message = "MONGODB_EXTRACTION_ERROR", str(exc)
-        logger.exception("MongoDB extraction failed for %s", dataset_name)
+        status = "FAILED"
+        error_code = _error_code(exc, "MONGODB_EXTRACTION_ERROR")
+        error_message = redact_error_message(exc)
     except (pa.ArrowException, OSError, TypeError, ValueError) as exc:
-        error_code, error_message = "PARQUET_OR_VALIDATION_ERROR", str(exc)
-        logger.exception("Parquet writing or validation failed for %s", dataset_name)
+        status = "FAILED"
+        error_code = _error_code(exc, "PARQUET_OUTPUT_ERROR")
+        error_message = redact_error_message(exc)
     except Exception as exc:
-        error_code, error_message = "UNEXPECTED_ERROR", str(exc)
-        logger.exception("Unexpected error for %s", dataset_name)
+        status = "FAILED"
+        error_code = _error_code(exc, "UNEXPECTED_ERROR")
+        error_message = redact_error_message(exc)
+    finally:
+        if temporary_path is not None:
+            _remove_file(temporary_path, "temporary Parquet output")
+        if status == "FAILED" and output_created:
+            _remove_file(output_path, "failed Parquet output")
+            output_file = None
 
-    return log_extraction(
+    return _safe_log_extraction(
         log_file=LOG_FILE, run_id=run_id, dataset_name=dataset_name,
-        collection_name=collection_name, started=started, status="FAILED",
-        records_read=len(records), records_extracted=0, records_rejected=rejected,
+        collection_name=collection_name, started=started, status=status,
+        records_read=records_read,
+        records_extracted=records_read if status in ("SUCCESS", "PARTIAL") else 0,
+        records_rejected=rejected,
         checks=checks, output_file=output_file, error_code=error_code,
-        error_message=error_message,
+        error_message=error_message, operation=operation,
     )
 
 
@@ -150,20 +228,39 @@ def main():
     """Run full-snapshot extraction for the three dashboard datasets."""
     logger = logging.getLogger("terraguide.extract")
     logger.setLevel(logging.INFO)
-    logger.addHandler(logging.StreamHandler())
+    if not any(
+        getattr(handler, "_terraguide_extract_handler", False)
+        for handler in logger.handlers
+    ):
+        handler = logging.StreamHandler()
+        handler._terraguide_extract_handler = True
+        logger.addHandler(handler)
 
     uri = os.getenv("MONGODB_URI")
     database_name = os.getenv("MONGODB_DATABASE")
-    if not uri:
-        logger.error("MONGODB_URI is missing from .env or the environment.")
-        return 1
-
     run_id = str(uuid.uuid4())
     client = None
+    started = datetime.now(timezone.utc)
+    operation = "validate_configuration"
+    exit_status = 1
+
     try:
+        if not isinstance(uri, str) or not uri.strip():
+            raise ValueError("MONGODB_URI is missing or empty.")
+        if database_name is not None and not database_name.strip():
+            raise ValueError("MONGODB_DATABASE must not be empty when set.")
+
+        operation = "connect"
         client = MongoClient(uri, serverSelectionTimeoutMS=10000)
+        operation = "ping"
         client.admin.command("ping")
-        database = client[database_name] if database_name else client.get_default_database()
+
+        operation = "select_database"
+        database = (
+            client[database_name]
+            if database_name
+            else client.get_default_database()
+        )
         if database is None:
             raise ValueError("Set MONGODB_DATABASE or include a database name in MONGODB_URI.")
 
@@ -171,22 +268,51 @@ def main():
             extract_collection(database, name, config, run_id, logger)
             for name, config in DATASETS.items()
         ]
-        return 1 if any(item["extraction_status"] == "FAILED" for item in results) else 0
+        exit_status = (
+            1
+            if any(
+                item["extraction_status"] == "FAILED"
+                or item.get("_log_write_failed", False)
+                for item in results
+            )
+            else 0
+        )
 
-    except (PyMongoError, ValueError) as exc:
-        logger.exception("Could not connect to MongoDB or select the database.")
-        log_extraction(
+    except Exception as exc:
+        fallback_error_code = (
+            "MONGODB_CONFIGURATION_ERROR"
+            if isinstance(exc, ConfigurationError) or operation == "validate_configuration"
+            else (
+                "MONGODB_DATABASE_SELECTION_ERROR"
+                if operation == "select_database"
+                else "MONGODB_CONNECTION_ERROR"
+            )
+        )
+        error_code = _error_code(
+            exc,
+            fallback_error_code,
+        )
+        error_message = redact_error_message(exc)
+        logger.error("Pipeline startup failed during %s: %s", operation, error_message)
+        _safe_log_extraction(
             log_file=LOG_FILE, run_id=run_id, dataset_name="pipeline",
-            collection_name=None, started=datetime.now(timezone.utc),
+            collection_name=None, started=started, operation=operation,
             status="FAILED", records_read=0, records_extracted=0,
             records_rejected=0, checks={"connection": "FAIL"},
-            output_file=None, error_code="CONNECTION_OR_CONFIGURATION_ERROR",
-            error_message=str(exc),
+            output_file=None, error_code=error_code, error_message=error_message,
         )
-        return 1
     finally:
-        if client:
-            client.close()
+        if client is not None:
+            try:
+                client.close()
+            except Exception as exc:
+                print(
+                    f"MongoDB client cleanup failed: {redact_error_message(exc)}",
+                    file=sys.stderr,
+                )
+                exit_status = 1
+
+    return exit_status
 
 
 if __name__ == "__main__":
