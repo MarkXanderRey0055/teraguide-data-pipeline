@@ -28,16 +28,96 @@ DATASETS = {
     "property_listings": {
         "collection": os.getenv("MONGODB_PROPERTIES_COLLECTION", "properties"),
         "required": ["_id", "location", "price", "status"],
+        "columns": {"_id": (str, ObjectId), "location": str, "price": (int, float), "status": str},
     },
     "buyer_listings": {
         "collection": os.getenv("MONGODB_BUYERS_COLLECTION", "buyerpreferences"),
         "required": ["_id", "userId"],
+        "columns": {"_id": (str, ObjectId), "userId": (str, ObjectId)},
     },
     "transaction_listings": {
         "collection": os.getenv("MONGODB_TRANSACTIONS_COLLECTION", "transactions"),
         "required": ["_id", "buyerId", "propertyId", "amount", "status"],
+        "columns": {"_id": (str, ObjectId), "buyerId": (str, ObjectId), "propertyId": (str, ObjectId), "amount": (int, float), "status": str},
     },
 }
+
+
+def _check(name, expected, actual, affected_count=0, severity="INFO", status=None):
+    """Create the stable, auditable shape used for validation results."""
+    return {
+        "check_name": name,
+        "expected": expected,
+        "actual": actual,
+        "affected_count": affected_count,
+        "severity": severity,
+        "status": status or ("PASS" if affected_count == 0 else "FAIL"),
+    }
+
+
+def validate_documents(documents, config):
+    """Validate extracted source documents without changing or filtering them."""
+    expected_columns = set(config["columns"])
+    actual_columns = set().union(*(doc.keys() for doc in documents)) if documents else set()
+    missing_columns = sorted(expected_columns - actual_columns)
+    unexpected_columns = sorted(actual_columns - expected_columns)
+    schema_unavailable = not documents
+    results = {
+        "schema": _check(
+            "schema_columns", sorted(expected_columns), sorted(actual_columns),
+            len(missing_columns), "WARNING" if schema_unavailable else ("CRITICAL" if missing_columns else "INFO"),
+            "SKIPPED" if schema_unavailable else ("FAIL" if missing_columns else "PASS"),
+        ),
+        "unexpected_columns": _check(
+            "unexpected_columns", "none (warning policy)", unexpected_columns,
+            len(unexpected_columns), "WARNING", "WARN" if unexpected_columns else "PASS",
+        ),
+    }
+
+    missing_required = {
+        field: sum(field not in doc or doc[field] is None for doc in documents)
+        for field in config["required"]
+    }
+    missing_required = {field: count for field, count in missing_required.items() if count}
+    required_affected = sum(
+        any(field not in doc or doc[field] is None for field in config["required"])
+        for doc in documents
+    )
+    results["required_fields"] = _check(
+        "required_values", "no null or missing required values", missing_required,
+        required_affected, "CRITICAL" if missing_required else "INFO",
+        "FAIL" if missing_required else "PASS",
+    )
+
+    missing_ids = sum("_id" not in doc or doc["_id"] is None for doc in documents)
+    ids = [str(doc["_id"]) for doc in documents if doc.get("_id") is not None]
+    duplicate_ids = len(ids) - len(set(ids))
+    results["primary_key"] = _check(
+        "primary_key_integrity", "_id present and unique",
+        {"missing_ids": missing_ids, "duplicate_ids": duplicate_ids},
+        missing_ids + duplicate_ids, "CRITICAL" if missing_ids or duplicate_ids else "INFO",
+        "FAIL" if missing_ids or duplicate_ids else "PASS",
+    )
+
+    type_errors = {}
+    for field, expected_type in config["columns"].items():
+        bad = sum(
+            field in doc and doc[field] is not None and not isinstance(doc[field], expected_type)
+            for doc in documents
+        )
+        if bad:
+            type_errors[field] = bad
+    type_affected = sum(
+        any(field in doc and doc[field] is not None and not isinstance(doc[field], expected_type)
+            for field, expected_type in config["columns"].items())
+        for doc in documents
+    )
+    results["data_types"] = _check(
+        "data_types", "expected extracted Python types", type_errors,
+        type_affected, "CRITICAL" if type_errors else "INFO",
+        "FAIL" if type_errors else "PASS",
+    )
+    return results
 
 
 def to_parquet_value(value):
@@ -116,15 +196,21 @@ def extract_collection(database, dataset_name, config, run_id, logger):
             raise LookupError(f"Collection '{collection_name}' was not found.")
 
         operation = "query"
-        documents = list(database[collection_name].find({}).sort("_id", 1))
+        collection = database[collection_name]
+        try:
+            source_count = collection.count_documents({})
+            checks["source_record_count"] = _check(
+                "source_record_count", source_count, "available", 0, "INFO", "PASS"
+            )
+        except Exception as exc:
+            source_count = None
+            checks["source_record_count"] = _check(
+                "source_record_count", "available", "unavailable: " + redact_error_message(exc),
+                0, "WARNING", "SKIPPED"
+            )
+        documents = list(collection.find({}).sort("_id", 1))
         records_read = len(documents)
-
-        missing_fields = sum(
-            any(field not in doc or doc[field] is None for field in config["required"])
-            for doc in documents
-        )
-        ids = [str(doc["_id"]) for doc in documents if "_id" in doc]
-        duplicate_ids = len(ids) - len(set(ids))
+        checks.update(validate_documents(documents, config))
 
         # Preserve all raw documents. Missing fields and duplicate IDs are logged
         # as warnings rather than silently dropping source records.
@@ -157,25 +243,30 @@ def extract_collection(database, dataset_name, config, run_id, logger):
         operation = "read_parquet_metadata"
         saved_count = pq.read_metadata(temporary_path).num_rows
 
-        checks = {
-            "collection_exists": True,
-            "required_fields_missing_records": missing_fields,
-            "duplicate_ids": duplicate_ids,
-            "parquet_count_matches": saved_count == records_read,
-        }
-
-        if saved_count != records_read:
-            error_code = "RECORD_COUNT_MISMATCH"
-            error_message = f"Read {records_read} records but wrote {saved_count} rows."
-            operation = "validate_parquet_count"
-            status = "FAILED"
-        elif missing_fields or duplicate_ids:
-            status = "PARTIAL"
-            error_code = "DATA_VALIDATION_WARNING"
-            error_message = (
-                f"Missing-field records: {missing_fields}; duplicate IDs: {duplicate_ids}. "
-                "All records were retained in the raw file."
+        checks["collection_exists"] = _check("collection_exists", True, True, 0, "INFO", "PASS")
+        checks["parquet_count"] = _check(
+            "parquet_record_count", records_read, saved_count,
+            abs(saved_count - records_read), "CRITICAL" if saved_count != records_read else "INFO",
+            "FAIL" if saved_count != records_read else "PASS",
+        )
+        if source_count is not None:
+            count_mismatch = source_count != records_read
+            checks["source_extracted_count"] = _check(
+                "source_extracted_record_count", source_count, records_read,
+                abs(source_count - records_read), "CRITICAL" if count_mismatch else "INFO",
+                "FAIL" if count_mismatch else "PASS",
             )
+        critical_failures = [item for item in checks.values()
+                             if isinstance(item, dict) and item.get("severity") == "CRITICAL"
+                             and item.get("status") == "FAIL"]
+
+        if critical_failures:
+            error_code = "RECORD_COUNT_MISMATCH"
+            if any(item["check_name"] != "parquet_record_count" for item in critical_failures):
+                error_code = "DATA_VALIDATION_FAILED"
+            error_message = "Critical extraction validation failed."
+            operation = "validate_data"
+            status = "FAILED"
         else:
             status = "SUCCESS"
 

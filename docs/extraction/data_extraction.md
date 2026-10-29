@@ -137,6 +137,19 @@ The extraction pipeline is configured to retrieve data from the `properties`, `b
 
 ## 3. Extraction Validation and Data Quality Checks
 
+### Stage 1 implementation policy
+
+Each full-snapshot run validates all three configured datasets and records structured
+results in `validation_results`. Expected columns are the fields in the Required
+Schemas tables above. Unexpected columns are retained and logged as warnings.
+Missing expected columns, null or missing required values, invalid expected types,
+missing `_id` values, duplicate `_id` values, and source/extracted count mismatches
+are critical failures and make the dataset and overall run `FAILED`. Empty snapshots
+skip column inference with a warning. A source-count query failure is logged as
+`SKIPPED` with `WARNING` severity, not as a passing comparison. Raw records are never
+removed or deduplicated by these checks. Each check records its expected result,
+actual result, affected count, severity, and status.
+
 Validation checks will be performed during each extraction run to ensure that the required TerraGuide data is accessible, complete, and suitable for handover to the Transformation Stage.
 
 The validation process focuses only on extraction-level checks. Data cleaning, standardization, and business transformations will be handled in the Transformation Stage.
@@ -166,7 +179,9 @@ The following metadata fields define the information that should be recorded for
 | Metadata Field | Purpose | Example Value or Format |
 |---|---|---|
 | run_id | Uniquely identifies an extraction execution for traceability. | extract_20261018_120000 |
+| dataset_name | Identifies the dashboard dataset being extracted. | property_listings |
 | collection_name | Identifies the MongoDB collection being extracted. | Property Listings |
+| operation | Identifies the operation associated with the record or failure. | query, write_parquet |
 | start_timestamp | Records when the extraction process begins. | 2026-10-18T12:00:00+08:00 |
 | end_timestamp | Records when the extraction process finishes. | 2026-10-18T12:00:08+08:00 |
 | extraction_status | Indicates the final result of the extraction operation. | SUCCESS, FAILED, or PARTIAL |
@@ -195,6 +210,8 @@ The following log levels are proposed:
 | WARNING | Records non-critical conditions requiring attention. | An unexpected record-count difference was detected. |
 | ERROR | Records errors that prevent an operation from completing successfully. | MongoDB query or Parquet serialization failed. |
 | CRITICAL | Records severe failures that prevent the extraction run from safely completing. | A required collection is unavailable and extraction cannot proceed. |
+
+The implemented extraction log is JSONL. Error messages redact MongoDB connection strings and common credential values. Parquet output is first written to a temporary file and published without replacing an existing timestamped output; temporary output from a failed extraction is removed. If a JSONL write fails, the failure (and any original extraction error) is reported to stderr without retrying the log write.
 
 ### 4.3 Use of Metadata and Logs
 
