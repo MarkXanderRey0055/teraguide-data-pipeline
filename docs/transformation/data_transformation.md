@@ -92,3 +92,49 @@ Each cleaning operation should be documented so that the team can identify the r
 ### 3.5 Implementation Status
 
 The rules in this section are proposed cleaning specifications. They must be reviewed against the actual profiling results and implemented in the transformation script before they can be considered operational.
+
+## 4. Standardization and Data Type Rules
+
+### 4.1 Purpose
+
+Standardization ensures that data across the extracted datasets follows consistent data types, formats, and reference values. These rules define how important fields will be converted and standardized during the transformation stage.
+
+### 4.2 Standardization Rules
+
+The following table defines the standardization rules to be evaluated for the `properties`, `buyerlistings`, and `transactions` datasets.
+
+| Rule ID | Column | Source Format | Standard Format | On Failure |
+|---|---|---|---|---|
+| S-01 | Date fields | Existing date, datetime, or string representation | Consistent date or datetime format, where applicable | Reject and log if conversion fails |
+| S-02 | Numeric fields | Integer, float, or numeric string | Appropriate numeric data type and precision | Reject and log if conversion fails |
+| S-03 | Text fields | String values with inconsistent casing or whitespace | Consistent text representation according to field requirements | Log or handle according to the applicable rule |
+| S-04 | Reference values and codes | Inconsistent representations of the same value | Approved standard value or code | Flag and log unmapped values |
+| S-05 | Missing or null values | Null, empty, or missing values | Retain null or apply an approved default, where appropriate | Apply the documented missing-value rule |
+
+*Note: These are proposed rule categories. Exact column names, source formats, target formats, and failure handling must be verified against the extracted schemas and project requirements.*
+
+### 4.3 Data Type Mapping
+
+The target data type for each important column must be documented before conversion. The mapping should identify the dataset, source column, source data type, target data type, and conversion rule.
+
+### 4.4 Format Standardization
+
+Date and time values must follow a consistent representation where applicable. Numeric fields must use appropriate precision and rounding rules. Text casing and whitespace should be standardized only when appropriate for the field.
+
+Currency, units of measurement, and country or region codes must follow documented conventions where those fields exist.
+
+### 4.5 Reference Values and Codes
+
+Inconsistent values representing the same meaning should be mapped to an approved standard value when supported by the data and project requirements.
+
+For example, values such as `M`, `Male`, and `male` may be mapped to `MALE` if the field represents gender and the mapping is approved. This is an illustrative example, not a confirmed rule for the current datasets.
+
+### 4.6 Handling Conversion Failures
+
+Values that cannot be converted or mapped must be handled according to the applicable rule. Depending on the issue, the value may be flagged, logged, or the record may be rejected and quarantined.
+
+Conversion failures must not be silently ignored. The affected records and reasons for failure should be traceable.
+
+### 4.7 Implementation Status
+
+The rules in this section describe the intended standardization requirements. Final mappings and conversion behavior will be confirmed after inspecting the extracted dataset schemas and validating the applicable rules.
