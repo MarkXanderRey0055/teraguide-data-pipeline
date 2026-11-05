@@ -138,3 +138,44 @@ Conversion failures must not be silently ignored. The affected records and reaso
 ### 4.7 Implementation Status
 
 The rules in this section describe the intended standardization requirements. Final mappings and conversion behavior will be confirmed after inspecting the extracted dataset schemas and validating the applicable rules.
+
+## 5. Business Transformation Rules
+
+### 5.1 Purpose
+
+Business transformation applies the necessary business rules to the standardized datasets to produce meaningful and structured information for downstream processing and analysis.
+
+These rules define how datasets may be combined, filtered, calculated, or aggregated based on the requirements of the TerraGuide Analytics project.
+
+### 5.2 Dataset Relationships and Joins
+
+The datasets included in the transformation stage are:
+
+- properties
+- buyerlistings
+- transactions
+
+Relevant relationships between these datasets will be identified using their corresponding identifiers and verified against the available schemas.
+
+Join operations must use documented relationship keys and appropriate join conditions. Unmatched records must be identified and handled according to the applicable business requirements.
+
+### 5.3 Business Transformation Rules
+
+The following table identifies the business transformation operations to be evaluated:
+
+| Rule ID | Transformation | Description | Expected Result |
+|---|---|---|---|
+| B-01 | Dataset Integration | Combine related datasets using verified identifiers and relationships. | A consistent dataset containing related information. |
+| B-02 | Business Filtering | Apply approved business conditions to include or exclude records. | Records that satisfy the defined business criteria. |
+| B-03 | Derived Fields | Calculate additional fields using existing dataset values when required. | Additional fields that support business analysis. |
+| B-04 | Data Aggregation | Summarize records using approved grouping and calculation rules. | Structured summary data for reporting and analysis. |
+
+### 5.4 Handling Excluded and Unmatched Records
+
+Records excluded by business filters or left unmatched during dataset integration must be accounted for and documented.
+
+The reason for exclusion or non-matching must be identifiable. Records must not be silently discarded during business transformation.
+
+### 5.5 Implementation Status
+
+The transformation operations listed in this section represent the proposed business transformation specifications. Specific join keys, filtering conditions, derived fields, and aggregation formulas must be confirmed against the project requirements and actual dataset structures before implementation.
