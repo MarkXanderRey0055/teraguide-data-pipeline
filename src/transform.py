@@ -80,6 +80,7 @@ def _prepare_output(table: pa.Table, output_path: Path) -> Path:
     except Exception:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _prepare_dataset(dataset_name: str, raw_dir: Path, processed_dir: Path):

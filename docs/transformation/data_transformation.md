@@ -6,11 +6,22 @@
 
 The transformation stage receives the extracted datasets produced by Stage 1. The expected input format is Parquet, stored in the `data/raw/` directory.
 
-The input datasets correspond to the following collections:
+The Stage 2 input datasets are exactly these three logical datasets:
 
-- `properties`
-- `buyerlistings`
 - `transactions`
+- `buyers`
+- `properties`
+
+Stage 2 reads the existing Stage 1 Parquet outputs from `data/raw/`. The
+logical-to-physical naming relationship is:
+
+| Logical Stage 2 dataset | Stage 1 physical dataset key/output prefix | MongoDB source collection |
+|---|---|---|
+| `transactions` | `transaction_listings` | `transactions` |
+| `buyers` | `buyer_listings` | `buyerpreferences` |
+| `properties` | `property_listings` | `properties` |
+
+The Stage 1 physical files and extraction scripts are not renamed or modified.
 
 The transformation stage must use the extracted files handed over by Stage 1 rather than querying the source database directly.
 
@@ -34,9 +45,9 @@ Data profiling is performed before transformation to understand the structure, c
 
 The following datasets are included in the profiling process:
 
-- `properties`
-- `buyerlistings`
 - `transactions`
+- `buyers`
+- `properties`
 
 The datasets will be read from the extracted Parquet files provided by Stage 1.
 
@@ -101,7 +112,8 @@ Standardization ensures that data across the extracted datasets follows consiste
 
 ### 4.2 Standardization Rules
 
-The following table defines the standardization rules to be evaluated for the `properties`, `buyerlistings`, and `transactions` datasets.
+The following table defines the proposed standardization rule categories to be
+evaluated for the `properties`, `buyers`, and `transactions` datasets.
 
 | Rule ID | Column | Source Format | Standard Format | On Failure |
 |---|---|---|---|---|
@@ -141,34 +153,151 @@ The rules in this section describe the intended standardization requirements. Fi
 
 ## 5. Business Transformation Rules
 
-### 5.1 Purpose
+### 5.1 Purpose and Dataset Scope
 
-Business transformation applies the necessary business rules to the standardized datasets to produce meaningful and structured information for downstream processing and analysis.
+The approved Stage 2 business integration uses exactly these three logical
+datasets:
 
-These rules define how datasets may be combined, filtered, calculated, or aggregated based on the requirements of the TerraGuide Analytics project.
+- `transactions`
+- `buyers`
+- `properties`
 
-### 5.2 Dataset Relationships and Joins
+Stage 2 must read the corresponding Stage 1 Parquet outputs from `data/raw/`.
+`Audit` and `BuyerPreference` are not independent Stage 2 input datasets.
 
-The datasets included in the transformation stage are:
+### 5.2 Approved Dataset Relationships and Joins
 
-- properties
-- buyerlistings
-- transactions
+The approved join conditions are:
 
-Relevant relationships between these datasets will be identified using their corresponding identifiers and verified against the available schemas.
+- `transactions.buyerId = buyers.userId`
+- `transactions.propertyId = properties._id`
 
-Join operations must use documented relationship keys and appropriate join conditions. Unmatched records must be identified and handled according to the applicable business requirements.
+Both joins are `INNER JOIN`s. Their approved cardinalities are:
 
-### 5.3 Business Transformation Rules
+- One buyer can have many transactions (1:N).
+- One property can have many transactions (1:N).
+- Each transaction references one buyer and one property (N:1).
+- The integrated output preserves one row per matched transaction.
 
-The following table identifies the business transformation operations to be evaluated:
+The equivalent SQL is:
 
-| Rule ID | Transformation | Description | Expected Result |
-|---|---|---|---|
-| B-01 | Dataset Integration | Combine related datasets using verified identifiers and relationships. | A consistent dataset containing related information. |
-| B-02 | Business Filtering | Apply approved business conditions to include or exclude records. | Records that satisfy the defined business criteria. |
-| B-03 | Derived Fields | Calculate additional fields using existing dataset values when required. | Additional fields that support business analysis. |
-| B-04 | Data Aggregation | Summarize records using approved grouping and calculation rules. | Structured summary data for reporting and analysis. |
+```sql
+transactions
+INNER JOIN buyers
+    ON transactions.buyerId = buyers.userId
+INNER JOIN properties
+    ON transactions.propertyId = properties._id
+```
+
+#### B-01 — Approved Dataset Integration
+
+| Item | Approved requirement |
+|---|---|
+| Rule ID | B-01 |
+| Rule name | Dataset Integration |
+| Required inputs | `transactions`, `buyers`, `properties` and the approved join keys above |
+| Logic | Deduplicate lookup datasets according to Section 5.3, then apply the two approved inner joins |
+| Output | `integrated_transactions`, one row per matched transaction |
+| Business justification | Combine each transaction with its verified buyer and property context |
+
+Only matched transactions are included in the integrated output. Unmatched
+transactions are preserved in quarantine according to Section 5.4.
+
+### 5.3 Approved Duplicate-Key Handling
+
+Lookup datasets must be deduplicated before joining:
+
+| Dataset | Lookup key | Approved handling |
+|---|---|---|
+| `buyers` | `userId` | Retain the record with the most recent `updatedAt` |
+| `properties` | `_id` | Retain the record with the most recent `updatedAt` |
+
+Validation must fail when `updatedAt` is missing in a duplicate-key group or
+when multiple records share the latest `updatedAt`. Duplicate records must not
+be selected arbitrarily.
+
+### 5.4 Unmatched Transaction Handling
+
+Unmatched transactions are classified into exactly one mutually exclusive
+category:
+
+| Condition | Reason |
+|---|---|
+| No buyer match, property match | `MISSING_BUYER` |
+| Buyer match, no property match | `MISSING_PROPERTY` |
+| Neither buyer nor property match | `MISSING_BUYER_AND_PROPERTY` |
+
+For every unmatched transaction:
+
+- Preserve the original transaction record in quarantine.
+- Record the transaction key and exclusion reason.
+- Classify the transaction exactly once.
+- Maintain a separate count for each category.
+- Exclude the unmatched transaction from `integrated_transactions`.
+
+The reconciliation requirement is:
+
+`Input Transactions = Integrated Transactions + Quarantined Transactions`
+
+Any reconciliation difference causes validation to fail.
+
+### 5.5 Integrated Output Contract
+
+The approved integrated output is named `integrated_transactions` and has one
+row per successfully matched transaction. It contains exactly 29 selected
+columns:
+
+- 11 transaction fields, unchanged.
+- 7 buyer fields prefixed with `buyer_`.
+- 11 property fields prefixed with `property_`.
+
+Buyer and property internal `_id` and `__v` fields, along with all other
+unselected source fields, are excluded. No inferred type conversions are
+introduced; the following physical Parquet types are authoritative.
+
+#### Transactions
+
+| Column | Type |
+|---|---|
+| `_id` | `string` |
+| `buyerId` | `string` |
+| `propertyId` | `string` |
+| `amount` | `double` |
+| `status` | `string` |
+| `notes` | `string` |
+| `createdBy` | `string` |
+| `completedAt` | `timestamp[us]` |
+| `createdAt` | `timestamp[us]` |
+| `updatedAt` | `timestamp[us]` |
+| `__v` | `int64` |
+
+#### Buyers
+
+| Column | Type |
+|---|---|
+| `buyer_userId` | `string` |
+| `buyer_budgetMin` | `int64` |
+| `buyer_budgetMax` | `int64` |
+| `buyer_intendedUse` | `string` |
+| `buyer_landType` | `string` |
+| `buyer_location` | `string` |
+| `buyer_minLotSize` | `int64` |
+
+#### Properties
+
+| Column | Type |
+|---|---|
+| `property_name` | `string` |
+| `property_owner` | `string` |
+| `property_location` | `string` |
+| `property_type` | `string` |
+| `property_price` | `int64` |
+| `property_status` | `string` |
+| `property_lat` | `double` |
+| `property_lng` | `double` |
+| `property_lotSize` | `int64` |
+| `property_pricePerSqm` | `int64` |
+| `property_size` | `int64` |
 
 ### 5.4 Handling Excluded and Unmatched Records
 
@@ -176,35 +305,6 @@ Records excluded by business filters or left unmatched during dataset integratio
 
 The reason for exclusion or non-matching must be identifiable. Records must not be silently discarded during business transformation.
 
-### 5.5 Implementation Status: Partially Specified — ETL Approval Pending
+### 5.5 Implementation Status
 
-The backend analytics implementation and MongoDB model definitions were reviewed to identify the existing business calculations, source relationships, and expected analytical outputs.
-
-The following business rules are confirmed in the existing application code. However, their implementation in the Stage 2 ETL pipeline remains subject to approval.
-
-| Rule ID | Business Rule | Existing Application Logic | ETL Status |
-|---|---|---|---|
-| B-01 | Latest Audit Selection | Select the latest audit for each property by sorting `generatedAt` in descending order and grouping by `propertyId`. | Proposed for ETL |
-| B-02 | Property Risk Classification | Classify properties as High, Medium, or Low based on compliance score and missing audit items. Properties without an audit are classified as High risk. | Proposed for ETL |
-| B-03 | Market Readiness Score | Calculate a weighted score using 60% compliance score and 40% price competitiveness. The price competitiveness calculation uses `comparisonAverage`, which requires further verification because it is not defined in the supplied Audit schema. | Proposed; field verification required |
-| B-04 | Property Success Rate | Calculate the percentile rank of each audited property's compliance score relative to the other audited properties. | Proposed for ETL |
-| B-05 | Buyer Preference Analytics | Calculate budget midpoints, budget distribution, average budget, preferred land types, and preferred locations from buyer preference records. | Proposed for ETL |
-| B-06 | Completed Transaction Revenue | Include transactions with status `Completed` and aggregate their transaction amounts. | Proposed for ETL |
-| B-07 | Monthly Revenue Aggregation | Group completed transaction amounts by year and month using `completedAt`. If unavailable, the existing application uses `updatedAt` or `createdAt` as a fallback and marks the result approximate. | Proposed for ETL |
-| B-08 | Revenue Forecast | Calculate the average revenue of the last three months represented in the monthly trend. | Proposed for ETL |
-
-#### Outstanding Requirements Before ETL Implementation
-
-The existing application logic provides a reference for the expected calculations. The following matters still require confirmation before implementation in the transformation pipeline:
-
-1. **Collection integration:** Confirm the approved join keys, join cardinality, and handling of unmatched records for the relationships between properties, audits, transactions, users, and buyer preferences.
-2. **Audit handling:** Confirm the treatment of properties without audit records and audits containing missing or invalid values.
-3. **Risk classification:** Confirm whether the ETL pipeline should reproduce the application's calculated risk classification or use the stored `riskLevel` field.
-4. **Market readiness:** Verify the source and availability of `comparisonAverage`, which is referenced by the analytics service but is not defined in the supplied Audit schema.
-5. **Buyer preference handling:** Confirm the treatment of incomplete budget ranges. The existing schema permits null values for `budgetMin` and `budgetMax`.
-6. **Transaction filtering:** Confirm whether only transactions with status `Completed` should be included in revenue calculations.
-7. **Completion dates:** Confirm whether transactions without `completedAt` should use fallback dates or be flagged and quarantined.
-8. **Revenue aggregation:** Confirm whether the ETL pipeline should reproduce the existing monthly revenue, year-to-date revenue, and three-observed-month forecast calculations.
-9. **Transformation responsibility:** Confirm whether these calculations should be performed in the ETL pipeline or whether the ETL should produce standardized datasets for the application to calculate analytics independently.
-
-**Implementation Decision:** The existing backend analytics calculations and source schema relationships are documented as references for the proposed business transformation rules. Stage 2 ETL implementation remains pending approval of the outstanding requirements.
+The transformation operations listed in this section represent the proposed business transformation specifications. Specific join keys, filtering conditions, derived fields, and aggregation formulas must be confirmed against the project requirements and actual dataset structures before implementation.
