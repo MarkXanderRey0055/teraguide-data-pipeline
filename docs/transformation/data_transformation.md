@@ -176,6 +176,35 @@ Records excluded by business filters or left unmatched during dataset integratio
 
 The reason for exclusion or non-matching must be identifiable. Records must not be silently discarded during business transformation.
 
-### 5.5 Implementation Status
+### 5.5 Implementation Status: Partially Specified — ETL Approval Pending
 
-The transformation operations listed in this section represent the proposed business transformation specifications. Specific join keys, filtering conditions, derived fields, and aggregation formulas must be confirmed against the project requirements and actual dataset structures before implementation.
+The backend analytics implementation and MongoDB model definitions were reviewed to identify the existing business calculations, source relationships, and expected analytical outputs.
+
+The following business rules are confirmed in the existing application code. However, their implementation in the Stage 2 ETL pipeline remains subject to approval.
+
+| Rule ID | Business Rule | Existing Application Logic | ETL Status |
+|---|---|---|---|
+| B-01 | Latest Audit Selection | Select the latest audit for each property by sorting `generatedAt` in descending order and grouping by `propertyId`. | Proposed for ETL |
+| B-02 | Property Risk Classification | Classify properties as High, Medium, or Low based on compliance score and missing audit items. Properties without an audit are classified as High risk. | Proposed for ETL |
+| B-03 | Market Readiness Score | Calculate a weighted score using 60% compliance score and 40% price competitiveness. The price competitiveness calculation uses `comparisonAverage`, which requires further verification because it is not defined in the supplied Audit schema. | Proposed; field verification required |
+| B-04 | Property Success Rate | Calculate the percentile rank of each audited property's compliance score relative to the other audited properties. | Proposed for ETL |
+| B-05 | Buyer Preference Analytics | Calculate budget midpoints, budget distribution, average budget, preferred land types, and preferred locations from buyer preference records. | Proposed for ETL |
+| B-06 | Completed Transaction Revenue | Include transactions with status `Completed` and aggregate their transaction amounts. | Proposed for ETL |
+| B-07 | Monthly Revenue Aggregation | Group completed transaction amounts by year and month using `completedAt`. If unavailable, the existing application uses `updatedAt` or `createdAt` as a fallback and marks the result approximate. | Proposed for ETL |
+| B-08 | Revenue Forecast | Calculate the average revenue of the last three months represented in the monthly trend. | Proposed for ETL |
+
+#### Outstanding Requirements Before ETL Implementation
+
+The existing application logic provides a reference for the expected calculations. The following matters still require confirmation before implementation in the transformation pipeline:
+
+1. **Collection integration:** Confirm the approved join keys, join cardinality, and handling of unmatched records for the relationships between properties, audits, transactions, users, and buyer preferences.
+2. **Audit handling:** Confirm the treatment of properties without audit records and audits containing missing or invalid values.
+3. **Risk classification:** Confirm whether the ETL pipeline should reproduce the application's calculated risk classification or use the stored `riskLevel` field.
+4. **Market readiness:** Verify the source and availability of `comparisonAverage`, which is referenced by the analytics service but is not defined in the supplied Audit schema.
+5. **Buyer preference handling:** Confirm the treatment of incomplete budget ranges. The existing schema permits null values for `budgetMin` and `budgetMax`.
+6. **Transaction filtering:** Confirm whether only transactions with status `Completed` should be included in revenue calculations.
+7. **Completion dates:** Confirm whether transactions without `completedAt` should use fallback dates or be flagged and quarantined.
+8. **Revenue aggregation:** Confirm whether the ETL pipeline should reproduce the existing monthly revenue, year-to-date revenue, and three-observed-month forecast calculations.
+9. **Transformation responsibility:** Confirm whether these calculations should be performed in the ETL pipeline or whether the ETL should produce standardized datasets for the application to calculate analytics independently.
+
+**Implementation Decision:** The existing backend analytics calculations and source schema relationships are documented as references for the proposed business transformation rules. Stage 2 ETL implementation remains pending approval of the outstanding requirements.
