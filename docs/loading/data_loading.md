@@ -1,0 +1,372 @@
+# Lab 5 — Stage 3: Data Load Documentation
+
+## Purpose and Scope
+
+This document defines the **Stage 3: Data Load** specification for the TerraGuide data pipeline. The goal of Stage 3 is to load validated, transformed datasets handed over from Stage 2 (Data Transformation) into a target database or data warehouse so that loaded data is complete, accurate, traceable, and ready for reporting, dashboards, or analysis.
+
+This pipeline is **batch only**. Data is intended to be loaded in bounded batches; streaming, micro-batch, and real-time loading are out of scope. Stage 3 must consume **only** the data handed over from Stage 2 and must not perform source extraction, data cleaning, standardization, or new business transformations.
+
+> **Document Scope Note (Member 1):** This document currently covers **Sections 1–3** of Stage 3 (`1. Load Source and Target Specification`, `2. Target Tables and Column Specification`, and `3. Load Strategy and Rules`). Sections 4–9 (`4. Pre-Load Validation Checks`, `5. Post-Load Validation and Reconciliation`, `6. Load Metadata and Log Specification`, `7. Log Retention, Rejected Data, and Access`, `8. Load Acceptance, Rollback, and Completion Rules`, and `9. Common Load Problems and Mitigation`) are assigned to other group members and are being prepared separately.
+
+---
+
+## Implementation Status Note
+
+To avoid confusing planned Stage 3 behavior with existing repository code, this document distinguishes three states throughout:
+
+| Status | Meaning |
+|---|---|
+| **Implemented (Stage 1 / Stage 2)** | Exists and is verified in the repository (`src/transform.py`, `src/transform_validation.py`, `src/transform_logger.py`, `src/transform_business.py`, `docs/transformation/data_transformation.md`). |
+| **Proposed (Stage 3 Design)** | Recommended Stage 3 design based on `lab-5.pdf` and the verified Stage 2 data contract; **not yet implemented** in code. |
+| **Pending Group Decision** | Design or infrastructure choice not yet decided or approved by the project group. |
+
+Database loading is **not implemented** in the current repository. No load scripts, database drivers, target schemas, or SQL migration files exist.
+
+---
+
+## 1. Load Source and Target Specification
+
+### 1.1 Load Input
+
+Stage 3 consumes only the transformed Parquet outputs handed over by Stage 2, as defined in `docs/transformation/data_transformation.md`, `src/transform.py`, and `src/transform_business.py`. Stage 3 does not read from MongoDB Atlas or directly modify Stage 1 raw files in `data/raw/`.
+
+| Logical Dataset | Stage 2 Producer | Format & Compression | Repository Handover Path | Observed Snapshot Volume (`20261019T020004Z`) | Stage 3 Load Eligibility |
+|---|---|---|---|---|---|
+| `property_listings` | `src/transform.py` (Issue #4) | Apache Parquet (Snappy) | `data/processed/property_listings.parquet` | 12 rows, 17 columns | Eligible (lossless Stage 2 output) |
+| `buyer_listings` | `src/transform.py` (Issue #4) | Apache Parquet (Snappy) | `data/processed/buyer_listings.parquet` | 12 rows, 11 columns | Eligible (lossless Stage 2 output) |
+| `transaction_listings` | `src/transform.py` (Issue #4) | Apache Parquet (Snappy) | `data/processed/transaction_listings.parquet` | 3 rows, 11 columns | Eligible (lossless Stage 2 output) |
+| `integrated_transactions` | `src/transform_business.py` (Approved B-01) | Apache Parquet (Snappy) | `data/processed/integrated_transactions.parquet` | 3 matched rows, 29 columns | Eligible (approved B-01 integrated output) |
+
+Stage 2 also produces quarantine files (`data/quarantine/{batch_id}_{dataset}.parquet` for Issue #5 validation and `data/quarantine/{batch_id}_unmatched_transactions.parquet` for B-01 unmatched transactions). Quarantine outputs are **not** loaded into target analytics tables; they remain excluded for data-quality review and audit traceability.
+
+> **Current Repository State:** At the time of writing, `data/processed/`, `data/quarantine/`, and `logs/transformation/` are not materialized on disk in the repository. Only the Stage 1 raw Parquet snapshot (`data/raw/*_20261019T020004Z.parquet`) and `logs/extraction_log.jsonl` are currently present. Stage 2 handover files are produced when the Stage 2 modules are executed.
+
+#### Transformation Run ID, Batch ID, and Batch Window
+
+| Metadata Item | Current State in Repository | Handover Limitation / Gap |
+|---|---|---|
+| **Stage 1 Extraction `run_id`** | `cab4efa7-5814-464b-9638-6b630744fdd4` in `logs/extraction_log.jsonl` for snapshot `20261019T020004Z` (`extraction_mode: full_snapshot`). | Not automatically propagated into Stage 2 `parent_run_id`. |
+| **Transformation `run_id`** | Supported by `src/transform_logger.py` (caller-supplied or auto-generated UUID). | No persisted `logs/transformation/transformation_log.jsonl` exists in the repository yet; logger is not wired into an orchestrator. |
+| **Transformation `batch_id`** | Required explicitly by `src/transform_validation.py` and `src/transform_business.py`; auto-generated by `src/transform_logger.py` if omitted. | Not embedded as a column inside Stage 2 processed Parquet files or their deterministic filenames (`data/processed/*.parquet`). |
+| **Batch Window** | Not available (`extraction_window_start: null`, `extraction_window_end: null` in `logs/extraction_log.jsonl`). | Stage 1 performs unfiltered full-snapshot extraction; no date-range window is encoded in Stage 1 filenames or Stage 2 logs. |
+| **Handover Approval Status** | Not implemented. | Stage 2 does not emit a formal handover manifest or automated `APPROVED` status gate for Stage 3 to consume. |
+
+### 1.2 Target System
+
+| Attribute | Current Status | Details |
+|---|---|---|
+| **Target Name and Purpose** | Proposed | TerraGuide analytics/reporting target database (or data warehouse) intended to serve reporting, dashboards, and analytical queries on properties, buyers, and transactions. |
+| **Database Management System (DBMS)** | **Pending group decision** | Not yet selected or configured. `requirements.txt` currently lists only `pymongo`, `pandas`, `pyarrow`, and `python-dotenv`; no relational or warehouse database driver is installed. |
+| **Target Schema / Database Name** | **Pending group decision** | Target database name and schema name (e.g., `warehouse`, `analytics`, or `staging`) have not been selected by the group. |
+
+No DBMS, server host, or schema name is invented here; these fields must be updated once the group approves the target platform.
+
+### 1.3 Load Method
+
+All Stage 3 loading behavior below is **proposed** and **not yet implemented**.
+
+- **Proposed Load Tool / Technology:** A Python batch loading module (e.g., `src/load.py`, not yet created) that reads Stage 2 Parquet files using `pyarrow` / `pandas` and writes to the selected target database using the DBMS-appropriate Python driver and SQL/bulk-load interface. The exact database library and bulk-load utility depend on the pending DBMS selection.
+- **Proposed Batch Frequency and Schedule:** **Batch only.** Neither Stage 1 nor Stage 2 has an implemented scheduler (such as cron or Apache Airflow); currently, pipeline stages are invoked manually from the command line or caller scripts. Proposed Stage 3 execution is manually triggered after Stage 2 transformation and validation complete, with any automated recurring schedule (e.g., daily batch schedule) **pending group decision**.
+- **Proposed Writing Method:** Batch-scoped **bulk insert** (for full-load or staging-table workflows) or **merge/upsert** (for key-based incremental or idempotent loads), executed inside database transactions. Row-by-row autocommit inserts are not recommended as data volume grows. The final writing mechanism depends on the approved DBMS and load strategy in Section 3.
+
+### 1.4 Load Scope
+
+#### Intended Datasets and Target Tables
+
+Stage 2 hands over two categories of processed Parquet files:
+1. The **approved B-01 integrated dataset** (`data/processed/integrated_transactions.parquet`).
+2. The **Issue #4 lossless base datasets** (`data/processed/buyer_listings.parquet`, `data/processed/property_listings.parquet`, and `data/processed/transaction_listings.parquet`).
+
+Whether Stage 3 loads **only** the integrated B-01 table (`integrated_transactions`), **only** the three base tables (`buyers`, `properties`, `transactions`), or **both** is **pending group decision**. Section 2 documents all four proposed target tables so the specification aligns with the full Stage 2 output contract.
+
+#### Proposed Loading Order and Dependencies
+
+1. **Parent / Lookup (Dimension) Tables First:** If loading the base tables, `buyers` and `properties` must be loaded before `transactions` (and before `integrated_transactions` if foreign key constraints to those tables are enforced). `buyers` and `properties` have no dependency on each other.
+2. **Child / Fact Tables Second:** `transactions` and/or `integrated_transactions` are loaded only after parent tables succeed. If `integrated_transactions` is loaded standalone without separate dimension tables, it has no internal target-table load dependency.
+
+#### Expected Batch Volume and Processing Window
+
+- **Verified Baseline Volume (Observed Snapshot `20261019T020004Z`):** `buyers` = 12 rows, `properties` = 12 rows, `transactions` = 3 rows, and `integrated_transactions` = 3 matched rows.
+- **Expected Production Volume and SLA Time Window:** **Pending group definition.** The repository does not contain production volume forecasts or a required load completion time window; none are estimated or invented here.
+
+### 1.5 Limitations and Assumptions
+
+- **Strict Stage Boundary:** Stage 3 must consume only Stage 2 handover outputs. It must not query MongoDB Atlas, re-extract source collections, or introduce unapproved data cleaning (`C-01`–`C-05`), standardization (`S-01`–`S-05`), or business rules (`B-02`–`B-04`).
+- **Unapproved Upstream Cleaning/Standardization:** Because `C-01`–`C-05` and `S-01`–`S-05` remain proposed and unimplemented in Stage 2, source nulls observed during Stage 2 profiling (1/12 nulls in five `buyers` preference columns; 2/3 nulls in `transactions.completedAt`) remain present in Stage 2 outputs and must be accommodated by nullable target columns.
+- **Missing Orchestration and Handover Manifest:** Stage 2 does not automatically emit a handover manifest, `batch_window`, or `APPROVED` flag, and `src/transform_business.py` publication is not crash-safe across process or machine interruption. Until automated handover metadata exists, Stage 3 depends on caller-supplied batch context and manual verification of Stage 2 logs/outputs.
+- **Target Infrastructure Constraints Pending:** Storage limits, concurrent query locking during business hours, and indexing/maintenance windows cannot be finalized until the target DBMS and hosting environment are selected.
+- **Database Write Access and Account Role (Pending):** A dedicated least-privilege database account or role for Stage 3 loading has **not** yet been provisioned. Once the target DBMS is selected, the proposed load role should be granted only the permissions required for batch loading (e.g., `INSERT`, `UPDATE`, `DELETE`/`TRUNCATE` on target tables and `SELECT`/`INSERT` on load log tables, without administrative or unrestricted DDL privileges). **No passwords, connection strings, tokens, or secret keys are documented here.**
+
+---
+
+## 2. Target Tables and Column Specification
+
+The proposed target tables below are derived directly from the verified Stage 2 output contract (`docs/transformation/data_transformation.md` Section 6, `src/transform.py`, and `src/transform_business.py`).
+
+- **Data types** reflect the verified Apache Arrow / Parquet physical types produced by Stage 2; exact SQL column types (e.g., `VARCHAR`/`TEXT`, `BIGINT`, `DOUBLE PRECISION`, `TIMESTAMP`) are **pending DBMS selection**.
+- **No columns, surrogate keys, `CHECK` constraints, or default values** are claimed as implemented. All target table structures, database constraints, indexes, and optional load-metadata columns (such as `load_batch_id`) are **proposed** and require group approval.
+
+### 2.1 Proposed Target Table Summary
+
+| Table (Proposed) | Type (Proposed) | Primary Key (Proposed) | Foreign Keys (Proposed) | Key Constraints (Proposed) | Purpose |
+|---|---|---|---|---|---|
+| `integrated_transactions` | Fact (Integrated / Denormalized) | `_id` | Optional: `buyerId -> buyers(userId)`, `propertyId -> properties(_id)` (if base tables are also loaded) | `_id NOT NULL, UNIQUE`; `buyerId NOT NULL`; `propertyId NOT NULL`; `buyer_userId NOT NULL` | Primary approved B-01 reporting table combining matched transactions with buyer and property context. |
+| `buyers` | Dimension (Lookup) | `_id` or `userId` (**pending**); FK reference key: `userId` | None | Chosen PK `NOT NULL, UNIQUE`; `userId` must be `NOT NULL, UNIQUE` to support `transactions.buyerId -> buyers.userId` (even if `_id` is PK) | Buyer preference lookup attributes from Issue #4 `buyer_listings.parquet`. |
+| `properties` | Dimension (Lookup) | `_id` | None | `_id NOT NULL, UNIQUE` | Property listing attributes from Issue #4 `property_listings.parquet`. |
+| `transactions` | Fact (Normalized) | `_id` | `buyerId -> buyers(userId)`, `propertyId -> properties(_id)` | `_id NOT NULL, UNIQUE`; `buyerId NOT NULL`; `propertyId NOT NULL` | Normalized transaction records from Issue #4 `transaction_listings.parquet`. |
+
+---
+
+### 2.2 Table Specification: `integrated_transactions` (Primary B-01 Output)
+
+- **Table Name:** `integrated_transactions` *(Proposed)*
+- **Table Type:** Fact / Integrated Reporting Table *(Proposed)*
+- **Source Handover File:** `data/processed/integrated_transactions.parquet` (Approved B-01 output; exactly 29 columns in fixed schema order verified by `INTEGRATED_SCHEMA` in `src/transform_business.py`)
+- **Purpose:** Stores one denormalized row per matched transaction enriched with deduplicated buyer preference and property listing attributes for analytics and reporting.
+- **Primary Key / Surrogate Key:** Proposed natural primary key `_id` (verified unique and non-null in Stage 2 snapshot). No surrogate key is generated by Stage 2; surrogate key adoption is **pending**.
+- **Foreign Keys and Relationships:** Logical relationships verified by Stage 2 B-01 inner joins: `buyerId -> buyers.userId` (also projected as `buyer_userId`) and `propertyId -> properties._id`. Database-level FK enforcement is proposed only if `buyers` and `properties` tables are also loaded.
+- **Constraints:**
+  - *Verified in Stage 2 output:* `_id`, `buyerId`, `propertyId`, `buyer_userId` are non-null for all matched rows; `completedAt`, `buyer_budgetMin`, `buyer_budgetMax`, `buyer_intendedUse`, `buyer_landType`, and `buyer_location` contain observed nulls and remain nullable.
+  - *Proposed database constraints:* `PRIMARY KEY (_id)` (`NOT NULL`, `UNIQUE`); `NOT NULL` on `buyerId`, `propertyId`, and `buyer_userId`. No `CHECK` constraints (such as `amount >= 0`) or default values are proposed as enforced because cleaning/standardization rules `C-01`, `C-03`, and `S-05` are unapproved.
+- **Indexes / Partitions:** Proposed primary key index on `_id`; optional proposed indexes on `buyerId`, `propertyId`, `status`, `completedAt`, and `updatedAt` depending on query patterns. Partitioning is not proposed at the observed volume (3 rows) and remains **pending** DBMS selection and volume growth.
+- **Load-Dependent Columns:**
+  - *Match key (proposed):* `_id`
+  - *Batch ID column (proposed):* `load_batch_id` *(not present in Stage 2 Parquet output; proposed load-stage metadata column if batch-scoped delete/lineage is stored in-table — pending approval)*
+  - *SCD Type 2 history columns:* Not applicable (transaction fact grain; not present in Stage 2 output).
+- **Reason for Inclusion:** Direct target for the only approved Stage 2 business integration contract (B-01), providing verified buyer and property context per transaction without requiring Stage 3 joins.
+
+#### Relevant Columns (`integrated_transactions`)
+
+| Column Name | Stage 2 Physical Type | Key / Role | Nullability (Observed / Proposed) | Description / Source Group |
+|---|---|---|---|---|
+| `_id` | `string` | Proposed PK & Match Key | `NOT NULL` (Proposed) | Unique transaction identifier (Transaction field). |
+| `buyerId` | `string` | Logical FK (`buyers.userId`) | `NOT NULL` (Proposed) | Buyer reference on the transaction (Transaction field). |
+| `propertyId` | `string` | Logical FK (`properties._id`) | `NOT NULL` (Proposed) | Property reference on the transaction (Transaction field). |
+| `amount` | `double` | Measure | Nullable (Observed non-null) | Transaction amount (Transaction field). |
+| `status` | `string` | Attribute | Nullable (Observed non-null) | Transaction status (Transaction field). |
+| `notes` | `string` | Attribute | Nullable | Transaction notes (Transaction field). |
+| `createdBy` | `string` | Attribute | Nullable | Creator identifier (Transaction field). |
+| `completedAt` | `timestamp[us]` | Event Timestamp | Nullable (2/3 nulls observed) | Transaction completion timestamp (Transaction field). |
+| `createdAt` | `timestamp[us]` | Audit Timestamp | Nullable | Transaction creation timestamp (Transaction field). |
+| `updatedAt` | `timestamp[us]` | Audit Timestamp | Nullable | Transaction last-update timestamp (Transaction field). |
+| `__v` | `int64` | Source Metadata | Nullable | MongoDB document version key retained by B-01 schema. |
+| `buyer_userId` | `string` | Matched Lookup Key | `NOT NULL` (Proposed) | Matched buyer `userId` (Buyer context). |
+| `buyer_budgetMin` | `int64` | Attribute | Nullable (1/12 nulls observed in source) | Buyer minimum budget (Buyer context). |
+| `buyer_budgetMax` | `int64` | Attribute | Nullable (1/12 nulls observed in source) | Buyer maximum budget (Buyer context). |
+| `buyer_intendedUse` | `string` | Attribute | Nullable (1/12 nulls observed in source) | Buyer intended land/property use (Buyer context). |
+| `buyer_landType` | `string` | Attribute | Nullable (1/12 nulls observed in source) | Buyer preferred land type (Buyer context). |
+| `buyer_location` | `string` | Attribute | Nullable (1/12 nulls observed in source) | Buyer preferred location (Buyer context). |
+| `buyer_minLotSize` | `int64` | Attribute | Nullable | Buyer minimum lot size preference (Buyer context). |
+| `property_name` | `string` | Attribute | Nullable | Property name (Property context). |
+| `property_owner` | `string` | Attribute | Nullable | Property owner identifier/name (Property context). |
+| `property_location` | `string` | Attribute | Nullable | Property location (Property context). |
+| `property_type` | `string` | Attribute | Nullable | Property type (Property context). |
+| `property_price` | `int64` | Measure | Nullable | Listed property price (Property context). |
+| `property_status` | `string` | Attribute | Nullable | Property listing status (Property context). |
+| `property_lat` | `double` | Attribute | Nullable | Property latitude coordinate (Property context). |
+| `property_lng` | `double` | Attribute | Nullable | Property longitude coordinate (Property context). |
+| `property_lotSize` | `int64` | Measure | Nullable | Property lot size (Property context). |
+| `property_pricePerSqm` | `int64` | Measure | Nullable | Property price per square meter (Property context). |
+| `property_size` | `int64` | Measure | Nullable | Property size (Property context). |
+
+*(All 29 columns of `INTEGRATED_SCHEMA` are listed above because B-01 enforces this exact 29-column output contract. Proposed load-stage metadata columns such as `load_batch_id` are not part of the Stage 2 Parquet schema and remain pending approval.)*
+
+---
+
+### 2.3 Table Specification: `buyers` (Proposed Dimension from Issue #4)
+
+- **Table Name:** `buyers` *(Proposed; inclusion alongside `integrated_transactions` is pending group decision)*
+- **Table Type:** Dimension / Lookup Table *(Proposed)*
+- **Source Handover File:** `data/processed/buyer_listings.parquet` (11 columns in observed snapshot)
+- **Purpose:** Stores buyer preference records independently of transactions to support buyer-level analytics and parent lookup integrity.
+- **Primary Key / Surrogate Key:** The final **primary key** selection between `_id` (MongoDB document identifier, verified 12/12 non-null and unique) and `userId` (verified 12/12 non-null and unique) remains **pending group approval**. Distinct from the primary key choice, `userId` is the required **foreign key reference key** for the verified Stage 2 B-01 relationship (`transactions.buyerId -> buyers.userId`). Because `userId` is referenced by `transactions.buyerId`, `userId` must carry a proposed `UNIQUE` (and `NOT NULL`) constraint; even if `_id` is selected as the primary key, `userId` must still have a proposed `UNIQUE` constraint to support the B-01 foreign key relationship. No database constraint is currently implemented, and no surrogate key is generated by Stage 2.
+- **Foreign Keys and Relationships:** None (parent table referenced via the Stage 2 B-01 relationship `transactions.buyerId -> buyers.userId`, where `userId` serves as the foreign key reference key).
+- **Constraints:** Proposed `PRIMARY KEY` (`NOT NULL`, `UNIQUE`) on the selected primary key (`_id` or `userId`, pending). Regardless of which column is selected as the primary key, `userId` must have a proposed `NOT NULL` and `UNIQUE` constraint to serve as the referenced foreign key target for `transactions.buyerId -> buyers.userId`. None of these database constraints are currently implemented. `budgetMin`, `budgetMax`, `intendedUse`, `landType`, and `location` must remain nullable (1/12 nulls observed in snapshot). No `CHECK` constraints or defaults are approved.
+- **Indexes / Partitions:** Proposed unique index on `userId` (required as the foreign key reference key, even if `_id` is the primary key) and on `_id` if not the primary key. Partitioning not applicable at current volume.
+- **Load-Dependent Columns:**
+  - *Match key (proposed):* `userId` (B-01 foreign key reference key) or `_id` *(pending primary key approval)*
+  - *Batch ID column (proposed):* `load_batch_id` *(not in Stage 2 output; pending approval)*
+  - *SCD Type 2 history columns:* Not implemented; pending SCD decision in Section 3.
+- **Reason for Inclusion:** Supports standalone buyer preference analysis (including buyers with no transactions) and acts as a parent dimension if normalized loading is approved.
+
+#### Relevant Columns (`buyers`)
+
+| Column Name | Stage 2 Physical Type | Key / Role | Nullability (Observed / Proposed) | Description |
+|---|---|---|---|---|
+| `_id` | `string` | Proposed PK Candidate (Source Document ID; pending) | `NOT NULL` (Proposed; `UNIQUE` if PK) | MongoDB buyer preference document ID. |
+| `userId` | `string` | Proposed FK Reference Key & Match Key (PK candidate; pending) | `NOT NULL, UNIQUE` (Proposed) | User identifier referenced by `transactions.buyerId`; requires a proposed `UNIQUE` constraint to support the B-01 relationship even if `_id` is selected as the primary key. |
+| `budgetMin` | `int64` | Attribute | Nullable (1/12 nulls observed) | Minimum buyer budget. |
+| `budgetMax` | `int64` | Attribute | Nullable (1/12 nulls observed) | Maximum buyer budget. |
+| `intendedUse` | `string` | Attribute | Nullable (1/12 nulls observed) | Intended property use. |
+| `landType` | `string` | Attribute | Nullable (1/12 nulls observed) | Preferred land type. |
+| `location` | `string` | Attribute | Nullable (1/12 nulls observed) | Preferred location. |
+| `minLotSize` | `int64` | Attribute | Nullable | Minimum preferred lot size. |
+| `createdAt` | `timestamp[us]` | Audit Timestamp | Nullable | Record creation timestamp. |
+| `updatedAt` | `timestamp[us]` | Audit / Dedup Timestamp | Nullable | Last-update timestamp used by B-01 lookup deduplication. |
+
+*(Technical source column `__v` (`int64`) is also present in `buyer_listings.parquet` and may be omitted from reporting tables unless raw parity is required.)*
+
+---
+
+### 2.4 Table Specification: `properties` (Proposed Dimension from Issue #4)
+
+- **Table Name:** `properties` *(Proposed; inclusion alongside `integrated_transactions` is pending group decision)*
+- **Table Type:** Dimension / Lookup Table *(Proposed)*
+- **Source Handover File:** `data/processed/property_listings.parquet` (17 columns in observed snapshot)
+- **Purpose:** Stores property listing attributes independently of transactions to support inventory/listing counts, pricing analysis, and parent lookup integrity.
+- **Primary Key / Surrogate Key:** Proposed natural primary key `_id` (verified 12/12 non-null and unique in snapshot; approved B-01 join key). No surrogate key is generated by Stage 2.
+- **Foreign Keys and Relationships:** None (parent table referenced by `transactions.propertyId -> properties._id`).
+- **Constraints:** Proposed `PRIMARY KEY (_id)` (`NOT NULL`, `UNIQUE`). No `CHECK` constraints or defaults are approved.
+- **Indexes / Partitions:** Proposed primary key index on `_id`; optional proposed indexes on `location`, `status`, and `type`. Partitioning not applicable at current volume.
+- **Load-Dependent Columns:**
+  - *Match key (proposed):* `_id`
+  - *Batch ID column (proposed):* `load_batch_id` *(not in Stage 2 output; pending approval)*
+  - *SCD Type 2 history columns:* Not implemented; pending SCD decision in Section 3.
+- **Reason for Inclusion:** Supports property listing analytics (including unsold/untransacted properties) and acts as a parent dimension if normalized loading is approved.
+
+#### Relevant Columns (`properties`)
+
+| Column Name | Stage 2 Physical Type | Key / Role | Nullability (Observed / Proposed) | Description |
+|---|---|---|---|---|
+| `_id` | `string` | Proposed PK & Match Key | `NOT NULL, UNIQUE` (Proposed) | Unique property identifier referenced by `transactions.propertyId`. |
+| `name` | `string` | Attribute | Nullable | Property listing name. |
+| `owner` | `string` | Attribute | Nullable | Property owner identifier/name. |
+| `location` | `string` | Attribute | Nullable | Property location. |
+| `type` | `string` | Attribute | Nullable | Property type. |
+| `price` | `int64` | Measure | Nullable | Listed property price. |
+| `status` | `string` | Attribute | Nullable | Property listing status. |
+| `lat` | `double` | Attribute | Nullable | Property latitude. |
+| `lng` | `double` | Attribute | Nullable | Property longitude. |
+| `lotSize` | `int64` | Measure | Nullable | Property lot size. |
+| `pricePerSqm` | `int64` | Measure | Nullable | Price per square meter. |
+| `size` | `int64` | Measure | Nullable | Property size. |
+| `createdAt` | `timestamp[us]` | Audit Timestamp | Nullable | Record creation timestamp. |
+| `updatedAt` | `timestamp[us]` | Audit / Dedup Timestamp | Nullable | Last-update timestamp used by B-01 lookup deduplication. |
+
+*(Source columns `documents` (`string`), `images` (`string`), and `__v` (`int64`) also exist in `property_listings.parquet` but are excluded from B-01 and are not core analytical columns.)*
+
+---
+
+### 2.5 Table Specification: `transactions` (Proposed Normalized Fact from Issue #4)
+
+- **Table Name:** `transactions` *(Proposed; may be omitted if the group chooses to load only `integrated_transactions`)*
+- **Table Type:** Fact Table *(Proposed)*
+- **Source Handover File:** `data/processed/transaction_listings.parquet` (11 columns in observed snapshot)
+- **Purpose:** Stores normalized transaction events linked by foreign keys to `buyers` and `properties`.
+- **Primary Key / Surrogate Key:** Proposed natural primary key `_id` (verified 3/3 non-null and unique in snapshot). No surrogate key is generated by Stage 2.
+- **Foreign Keys and Relationships:** Proposed `buyerId -> buyers(userId)` and `propertyId -> properties(_id)` (validated in `src/transform_validation.py`).
+- **Constraints:** Proposed `PRIMARY KEY (_id)` (`NOT NULL`, `UNIQUE`); proposed `NOT NULL` on `buyerId` and `propertyId`. `completedAt` must remain nullable (2/3 nulls observed in snapshot). No `CHECK` constraints or defaults are approved.
+- **Indexes / Partitions:** Proposed primary key index on `_id`; optional proposed indexes on `buyerId`, `propertyId`, `status`, and `completedAt`. Partitioning not applicable at current volume.
+- **Load-Dependent Columns:**
+  - *Match key (proposed):* `_id`
+  - *Batch ID column (proposed):* `load_batch_id` *(not in Stage 2 output; pending approval)*
+  - *SCD Type 2 history columns:* Not applicable.
+- **Reason for Inclusion:** Provides a normalized fact table if the target warehouse adopts a star/relational schema alongside `buyers` and `properties`.
+
+#### Relevant Columns (`transactions`)
+
+| Column Name | Stage 2 Physical Type | Key / Role | Nullability (Observed / Proposed) | Description |
+|---|---|---|---|---|
+| `_id` | `string` | Proposed PK & Match Key | `NOT NULL, UNIQUE` (Proposed) | Unique transaction identifier. |
+| `buyerId` | `string` | Proposed FK (`buyers.userId`) | `NOT NULL` (Proposed) | Associated buyer reference. |
+| `propertyId` | `string` | Proposed FK (`properties._id`) | `NOT NULL` (Proposed) | Associated property reference. |
+| `amount` | `double` | Measure | Nullable | Transaction amount. |
+| `status` | `string` | Attribute | Nullable | Transaction status. |
+| `notes` | `string` | Attribute | Nullable | Transaction notes. |
+| `createdBy` | `string` | Attribute | Nullable | Creator identifier. |
+| `completedAt` | `timestamp[us]` | Event Timestamp | Nullable (2/3 nulls observed) | Transaction completion timestamp. |
+| `createdAt` | `timestamp[us]` | Audit Timestamp | Nullable | Record creation timestamp. |
+| `updatedAt` | `timestamp[us]` | Audit Timestamp | Nullable | Last-update timestamp. |
+
+*(Technical source column `__v` (`int64`) is also present in `transaction_listings.parquet`.)*
+
+---
+
+## 3. Load Strategy and Rules
+
+All loading rules below are **proposed** and **not yet implemented**. Final approval is pending group decisions on target DBMS, table scope, and change-handling policy.
+
+### 3.1 Load Type
+
+- **Current Upstream Reality:** Stage 1 executes full-snapshot extraction (`find({})` with no incremental timestamp window) and Stage 2 processes the full snapshot and writes deterministic Parquet output files (`src/transform.py` and `src/transform_business.py`).
+- **Proposed Approach (Pending Group Approval — Not Yet Implemented):**
+  - **Option A — Full Reload (Truncate and Reload):** Replace the target table using the complete current Stage 2 snapshot (truncate/clear and bulk-insert inside a transaction). This directly matches the current full-snapshot Stage 1 and Stage 2 behavior and is simple to keep idempotent.
+  - **Option B — Full-Snapshot Upsert (Merge on Match Key):** Read the complete Stage 2 snapshot, insert new records, and update matching records using the chosen match key without truncating the target table. **Snapshot-based upsert is not true incremental loading** because Stage 1 and Stage 2 still process and hand over full snapshots rather than incremental deltas. Furthermore, upsert alone does **not** remove target records that are absent from a later full snapshot (missing-record handling must be explicitly decided under Section 3.4).
+- **True Incremental Load:** Not currently supported end-to-end because neither Stage 1 nor Stage 2 implements incremental extraction windows or change-data deltas. True incremental loading remains a future enhancement pending upstream changes.
+- **Status:** **Pending group approval**; neither full reload nor full-snapshot upsert is currently implemented.
+
+### 3.2 Write Logic
+
+- **Proposed Write Method (Not Yet Implemented):** **Full-snapshot upsert** (insert new records, update existing matching records using the chosen match key) or **full reload** (replace the target table using the complete current snapshot via transaction-scoped truncate/delete and bulk insert).
+- **Proposed Match Keys:**
+  - `integrated_transactions`: `_id`
+  - `buyers`: `userId` (B-01 foreign key reference key; or `_id` if document-ID primary key is approved — pending)
+  - `properties`: `_id`
+  - `transactions`: `_id`
+- **Handling Existing Records:**
+  - Under proposed **full-snapshot upsert**: insert incoming records whose match key does not exist in the target table, and update non-key columns for records matching an existing key. Upsert alone does **not** delete target records that are absent from a later full snapshot.
+  - Under proposed **full reload**: replace the entire target table using the complete current Stage 2 snapshot within a transaction (clearing existing rows before bulk-inserting the current snapshot).
+
+### 3.3 Handling of Changing Data
+
+- **Current State:** Neither SCD Type 1 nor SCD Type 2 is implemented in Stage 2 or Stage 3, and no SCD history columns (`effective_from`, `effective_to`, `is_current`) exist in any Stage 2 Parquet output.
+- **Proposed Handling (Pending Approval):**
+  - **Dimensions (`buyers`, `properties`):** Proposed **SCD Type 1 (overwrite)** as the baseline so the target reflects the latest approved Stage 2 snapshot without inventing new history columns. If the group requires historical tracking of property price/status or buyer preference changes, **SCD Type 2** would need to be approved along with target-managed history columns and surrogate keys.
+  - **Facts (`transactions`, `integrated_transactions`):** Proposed **overwrite/upsert on `_id`** to reflect legitimate lifecycle updates (such as `status` changes or `completedAt` populating from `NULL` to a timestamp). SCD Type 2 is not proposed for transaction facts.
+
+### 3.4 Deleted or Inactive Records
+
+- **Current Upstream Reality:** Stage 1 and Stage 2 do not produce explicit delete flags or tombstones. A document deleted from MongoDB simply does not appear in later full snapshots.
+- **Proposed Handling (Unresolved — Pending Group Approval; Not Yet Implemented):**
+  - If **full reload** is selected, the target table is replaced using the complete current Stage 2 snapshot, so records absent from the latest snapshot are removed automatically.
+  - If **full-snapshot upsert** is selected, **upsert alone does not remove target records that are absent from a later full snapshot**. The group must explicitly decide how to treat missing records:
+    1. **Retain:** Leave absent target records unchanged in the target table.
+    2. **Soft-delete:** Mark absent target records using a proposed target-managed flag (e.g., `is_active` / `is_deleted`, not present in Stage 2 output).
+    3. **Physically delete:** Remove absent target records through an explicit snapshot-reconciliation delete step.
+- **Status:** **Pending group approval.**
+
+### 3.5 Late-Arriving Records and Schema Differences
+
+- **Late-Arriving Records:** Stage 2 does not process late-arriving data incrementally; late records arrive in a subsequent Stage 1 full snapshot and are reprocessed through Stage 2. In Stage 3 (proposed), late-arriving records included in a new Stage 2 handover would be inserted or updated normally via the batch's full reload or upsert on the match key. Unmatched late transactions are already intercepted and quarantined by Stage 2 B-01 (`MISSING_BUYER`, `MISSING_PROPERTY`, `MISSING_BUYER_AND_PROPERTY`).
+- **Schema Differences:** Proposed Stage 3 behavior (not yet implemented) is to validate the incoming Parquet schema against the expected target contract before writing:
+  - **Missing required columns or incompatible data types:** Reject the batch before writing any rows and log the schema mismatch for investigation.
+  - **Unexpected extra columns:** Hold/flag the batch for manual review rather than silently altering the target table or silently dropping unapproved columns.
+
+### 3.6 Load Order and Dependencies
+
+- **Parent-Child Order (When Loading Normalized Tables):**
+  1. Load `buyers` and `properties` first (parent lookup/dimension tables).
+  2. Load `transactions` and/or `integrated_transactions` only after parent loads succeed.
+- **Standalone B-01 Load:** If only `integrated_transactions` is loaded, no parent-table load dependency exists inside the target database because buyer and property attributes are already joined by Stage 2 B-01.
+- **Unmatched Foreign Keys:**
+  - For `integrated_transactions.parquet`, Stage 2 B-01 already guarantees every row matched both a buyer and a property (unmatched rows are quarantined before Stage 3).
+  - If an unmatched foreign key occurs during Stage 3 loading (for example, when loading `transaction_listings.parquet` or if target dimension tables are out of sync), proposed behavior is to **fail and roll back the affected table/batch** (or reject the affected rows to a load-stage rejection output, pending Section 4/5/8 rules) rather than inserting orphan facts or fabricating an `"Unknown"` dimension member. Whether to use strict rejection or an `"Unknown"` dimension member is **pending group approval**.
+
+### 3.7 Transaction and Rollback Handling
+
+- **Proposed Transaction Scope (Pending DBMS Selection & Group Approval):**
+  - **Per-table transaction:** Each target table load executes within a single database transaction (`BEGIN` ... `COMMIT`), stopping the batch if any table fails.
+  - **Whole-batch transaction (preferred if supported by selected DBMS):** All target tables in the batch execute within one atomic transaction so that a child-table failure also rolls back parent-table changes from the same batch.
+- **Proposed Rollback Behavior:** If any write error, constraint violation, connection drop, or critical post-write failure occurs before commit, the loader executes `ROLLBACK` so no partial batch data remains committed in the target table. Subsequent dependent tables in the batch are not executed, and the failure is recorded in load logs.
+- **Implementation Status:** **Unimplemented.** No database transaction or rollback code exists in the repository.
+
+### 3.8 Rerun and Idempotency
+
+- **Objective:** Re-executing the same Stage 3 batch must not create duplicate rows or inflate analytical totals.
+- **Proposed Prevention & Recovery Mechanisms (Not Yet Implemented):**
+  1. **Batch-ID Tracking:** Require an explicit `batch_id` for every Stage 3 load run (matching Stage 2 validation/B-01 convention) and check load metadata before writing to prevent accidentally reloading a `batch_id` that already finished with `SUCCESS`.
+  2. **Idempotent Write Pattern:** Use either (a) full-snapshot upsert/merge on the chosen match key (`_id` / `userId`)—which inserts new records and updates matching records without duplicating rows, while leaving missing-record removal to the approved Section 3.4 policy, (b) transaction-scoped delete-by-`load_batch_id` followed by insert, or (c) transaction-scoped full reload replacing the target table with the complete current snapshot.
+  3. **Failure Recovery:** After correcting the root cause of a failed load, confirm that the failed transaction rolled back cleanly (zero partial rows left for that `batch_id`), then rerun Stage 3 against the same verified Stage 2 Parquet handover artifacts and `batch_id`.
+- **Implementation Status:** **Unimplemented.** Idempotency cannot be claimed until the loader and load metadata store are implemented and tested.
+
+### 3.9 Load Strategy Summary Table
+
+| Table (Proposed) | Load Type (Proposed / Pending) | Write Logic (Proposed) | Match Key (Proposed) | On Failure (Proposed) |
+|---|---|---|---|---|
+| `buyers` | Full reload or full-snapshot upsert *(Pending; not true incremental)* | Upsert (SCD Type 1) or full reload (truncate + bulk insert) | `userId` *(FK ref key; or `_id`, pending)* | Roll back transaction, stop batch |
+| `properties` | Full reload or full-snapshot upsert *(Pending; not true incremental)* | Upsert (SCD Type 1) or full reload (truncate + bulk insert) | `_id` | Roll back transaction, stop batch |
+| `transactions` | Full reload or full-snapshot upsert *(Pending; not true incremental)* | Upsert on `_id` or full reload (truncate + bulk insert) | `_id` | Roll back transaction, stop batch |
+| `integrated_transactions` | Full reload or full-snapshot upsert *(Pending; not true incremental)* | Upsert on `_id` or full reload (truncate + bulk insert) | `_id` | Roll back transaction, stop batch |
+
+---
+
