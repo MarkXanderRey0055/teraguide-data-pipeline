@@ -370,3 +370,191 @@ All loading rules below are **proposed** and **not yet implemented**. Final appr
 
 ---
 
+## 4. Pre-Load Validation Checks
+
+Pre-load validation ensures that the Stage 3 target database and incoming Stage 2 handover files are ready before any records are written. These checks are proposed Stage 3 requirements and are *not yet implemented*, because the repository currently has no database loading module or configured target database.
+
+Stage 3 must validate the transformed handover only. It must not repeat extraction, cleaning, standardization, or business transformation checks already performed by Stage 1 and Stage 2.
+
+### 4.1 Pre-Load Validation Check Specification
+
+| Check Name | Target | Purpose | Validation Criteria | Severity |
+|---|---|---|---|---|
+| Target Database Connection | Target database | Confirm that the database is reachable before loading begins. | Connection succeeds within the configured timeout. | Critical |
+| Database Write Permission | Stage 3 load account | Ensure the loading account has permission to write to the required target tables. | Required write permissions are available for all selected target tables. | Critical |
+| Target Table Existence | All selected target tables | Prevent failures caused by missing target tables. | Every required target table exists in the selected database and schema. | Critical |
+| Schema Match | Stage 2 Parquet files and target tables | Prevent incompatible columns and data types from being loaded. | Required columns exist and their data types are compatible with the approved target contract. | Critical |
+| Handover Completeness | Stage 2 output files | Ensure that the expected transformed datasets are available. | All required Stage 2 Parquet files for the approved load scope exist and can be read. | Critical |
+| Handover Approval Status | Transformation handover metadata | Ensure only approved transformed data is loaded. | Handover status equals APPROVED. Until a formal handover mechanism exists, manual approval must be confirmed. | Critical |
+| Input Record Count | Stage 2 handover metadata and Parquet files | Confirm that the incoming record count matches the handover information. | Actual Parquet row count equals the expected count recorded in the handover metadata. | Critical |
+| Duplicate Batch Check | Load metadata or load log | Prevent the same successful batch from being loaded again unintentionally. | The incoming batch_id has no previous SUCCESS load record. | Critical |
+| Storage Availability | Target database storage | Prevent loading failures caused by insufficient storage. | Available storage meets the estimated requirement for the incoming batch. | Critical |
+| Batch Context Completeness | Stage 3 load request | Ensure the load can be identified and traced. | A valid batch ID, target scope, and required transformation reference are available. | Critical |
+
+### 4.2 Validation Failure Handling
+
+The following behavior is proposed:
+
+- If a critical validation check fails, Stage 3 must stop before writing records to the target database.
+- The failure must be recorded with the corresponding check name, error code, and error message.
+- The responsible operator must review and correct the problem before retrying the load.
+- Non-critical warnings may be recorded for review, provided they do not violate required data contracts or approved acceptance rules.
+- No incoming records should be silently removed to make a pre-load check pass.
+
+*Implementation Status:* These checks are proposed for Stage 3. Existing Stage 2 validation is implemented in src/transform_validation.py, but it does not validate database connectivity, target-table availability, database permissions, or load-batch duplication.
+
+---
+
+## 5. Post-Load Validation and Reconciliation
+
+Post-load validation verifies that the records received from Stage 2 were correctly written to the selected target database.
+
+These checks are performed after the proposed database loading operation. They do not introduce new cleaning or business transformation rules. Any data-quality issue discovered after loading must be reported and handled according to the approved rejection, rollback, and acceptance procedures.
+
+### 5.1 Post-Load Validation Check Specification
+
+| Check Name | Target | Purpose | Validation Criteria | Severity |
+|---|---|---|---|---|
+| Record Reconciliation | Incoming Stage 2 batch and target tables | Detect missing or extra records during loading. | Records Received = Records Loaded + Records Rejected. | Critical |
+| Batch Row Count | Target table | Confirm that the expected number of records was written for the batch. | Actual successfully loaded row count equals the expected accepted row count. | Critical |
+| Primary Key Uniqueness | Primary key of each target table | Prevent duplicate records in the target. | Duplicate primary key count equals 0. | Critical |
+| Referential Integrity | Foreign key relationships between target tables | Prevent orphan records in normalized fact and dimension tables. | All required foreign key references match an existing parent record. | Critical |
+| Required Column Null Check | Target table required columns | Ensure required identifiers and keys are present. | Null count in approved NOT NULL columns equals 0. | Critical |
+| Schema and Data Type Check | Target table columns | Confirm that loaded records conform to the target schema. | Actual target column types and structure match the approved target contract. | Critical |
+| Aggregate Reconciliation | Applicable numeric measures | Detect possible value loss during loading. | If an aggregate check is approved for a measure, the incoming accepted batch total equals the corresponding loaded target total. | Critical |
+| Load Error Check | Load logs and target database | Identify database errors, constraint violations, and interruptions. | No unresolved critical loading errors or constraint violations remain. | Critical |
+
+### 5.2 Record Reconciliation
+
+The required reconciliation equation is:
+
+Records Received = Records Loaded + Records Rejected
+
+Definitions:
+
+- *Records Received:* Number of records handed over by Stage 2 for the current load batch.
+- *Records Loaded:* Number of records successfully written to the target database.
+- *Records Rejected:* Number of records received by Stage 3 but not written because of load-stage failures, such as database constraint violations.
+
+Records already rejected or quarantined by Stage 2 are not counted as Stage 3 load rejections because they are not part of the accepted Stage 2 handover.
+
+For example, if a batch contains 100 records received from Stage 2, 98 successfully loaded records, and 2 rejected records:
+
+100 = 98 + 2
+
+The reconciliation passes.
+
+records_updated and records_inserted should be tracked separately as load operation metrics. When using upsert, they must not be added again to the reconciliation equation if both are already included in the successfully loaded count.
+
+### 5.3 Referential Integrity Considerations
+
+For the proposed normalized target structure:
+
+- transactions.buyerId must reference buyers.userId.
+- transactions.propertyId must reference properties._id.
+
+If the group chooses to load only integrated_transactions, the B-01 output already contains matched buyer and property information from Stage 2. Separate target dimension tables are not required for that standalone table.
+
+The Stage 2 B-01 process already classifies unmatched transactions and places them in quarantine. Stage 3 must not repeat those business joins or silently add unmatched records.
+
+### 5.4 Handling Validation Failures
+
+The proposed handling is:
+
+- Critical reconciliation, uniqueness, schema, or referential-integrity failures prevent the batch from being marked successful.
+- If the load is still inside an active database transaction, the proposed behavior is to roll back the transaction.
+- If data has already been committed, recovery must follow the approved rollback or batch-recovery procedure.
+- Failed records and their error reasons must be recorded for investigation.
+- The original Stage 2 handover files must remain unchanged.
+
+*Implementation Status:* Post-load validation and reconciliation are not yet implemented. Existing Stage 2 validation checks apply before handover and must not be represented as completed Stage 3 database validation.
+
+---
+
+## 6. Load Metadata and Log Specification
+
+Stage 3 must maintain load metadata and logs to provide traceability for every batch written to the target database.
+
+The metadata should connect each Stage 3 load operation to its corresponding Stage 2 transformation run and batch.
+
+The following specification is proposed based on the Lab 5 requirements.
+
+### 6.1 Required Load Metadata Fields
+
+| Field Name | Purpose | Example Value / Format |
+|---|---|---|
+| run_id | Unique identifier for the Stage 3 load run. | LOAD_20261020_0400 |
+| transformation_run_id | Links the load operation to the Stage 2 transformation run. | TRN_20261020_0300 |
+| batch_id | Identifies the specific batch being loaded. | BATCH_20261020 |
+| batch_window | Identifies the data date range covered by the batch, when available. | 2026-10-20 to 2026-10-20 |
+| table_name | Identifies the target table being loaded. | integrated_transactions |
+| load_type | Indicates whether the operation is a full reload or incremental load. | FULL |
+| load_start_ts | Records when the loading operation starts. | 2026-10-20T04:00:02Z |
+| load_end_ts | Records when the loading operation finishes. | 2026-10-20T04:03:41Z |
+| load_duration_sec | Measures the total loading time in seconds. | 219 |
+| status | Records the result of the load operation. | SUCCESS, FAILED, WARNING |
+| records_received | Number of records received from the Stage 2 handover. | 100 |
+| records_inserted | Number of new records inserted into the target. | 80 |
+| records_updated | Number of existing records updated during upsert. | 18 |
+| records_rejected | Number of records that failed to load. | 2 |
+| pre_load_result | Records the result of the pre-load validation checks. | PASS |
+| post_load_result | Records the result of the post-load validation checks. | PASS |
+| error_code | Identifies the error category when a failure occurs. | DB_CONSTRAINT_ERROR |
+| error_message | Provides a description of the failure, when applicable. | Foreign key constraint violation |
+| load_code_version | Identifies the version of the Stage 3 loading code. | v1.0.0 |
+
+The example values above illustrate the proposed metadata format. They are not actual Stage 3 execution results.
+
+### 6.2 Logging Format and Storage
+
+The proposed Stage 3 logging format is JSON Lines (.jsonl), with one metadata record per load operation or target-table load.
+
+Proposed storage location:
+
+logs/loading/load_log.jsonl
+
+Each record should contain the required load metadata fields, including the run identifier, batch identifier, target table, timestamps, record counts, validation results, and error details.
+
+The log must not contain passwords, database credentials, connection strings, or secret keys.
+
+### 6.3 Purpose of Load Metadata and Logs
+
+| Purpose | Description |
+|---|---|
+| Monitoring | Tracks load status, execution duration, and record counts for each batch. |
+| Troubleshooting | Helps identify database errors, failed validation checks, and rejected records. |
+| Auditing | Provides a history of when data was loaded, which target table received it, and the result of the operation. |
+| Data Lineage | Connects the Stage 3 load run to its corresponding Stage 2 transformation run and batch. |
+| Recovery | Helps identify failed batches and determine which batch must be reviewed or rerun. |
+
+### 6.4 Relationship with Existing Stage 2 Metadata
+
+Stage 2 already has a transformation logger implemented in src/transform_logger.py.
+
+It records transformation-related information such as:
+
+- run_id
+- parent_run_id
+- batch_id
+- Dataset name
+- Input and output file paths
+- Start and end timestamps
+- Records read, output, rejected, and modified
+- Applied rules
+- Validation results
+- Error information
+- Code and rule versions
+
+Stage 3 should maintain its own load metadata rather than treating the Stage 2 transformation log as a database load log.
+
+The Stage 2 metadata should be referenced by Stage 3 to preserve the relationship between transformation and loading.
+
+*Current Metadata Limitations:*
+
+- Stage 2 does not automatically propagate a formal transformation run ID into every processed Parquet file.
+- A formal handover manifest and automated APPROVED status are not currently implemented.
+- The batch window is not automatically available because Stage 1 currently performs full-snapshot extraction without a defined date-range window.
+- Stage 3 load metadata and logs/loading/load_log.jsonl do not yet exist.
+
+*Implementation Status:* The Stage 2 transformation logger is implemented. The Stage 3 load logger, load metadata storage, database integration, and automated lineage between transformation and loading remain proposed and unimplemented.
+
